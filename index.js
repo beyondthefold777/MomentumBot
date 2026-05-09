@@ -8,7 +8,7 @@ const { log } = require("./utils/logger");
 
 const CONFIG = require("./config");
 
-// In-memory price history (we'll upgrade later if needed)
+// In-memory price history
 let priceHistory = [];
 
 // Main bot loop
