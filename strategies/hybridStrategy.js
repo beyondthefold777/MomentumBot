@@ -6,7 +6,16 @@ const {
     getTrendDirection
 } = require("../utils/indicators");
 
-function evaluateStrategy({ price, history, position }) {
+// =========================
+// STRATEGY ENGINE (SCALP + TREND)
+// =========================
+
+function evaluateStrategy({
+    price,
+    history,
+    position,
+    regime
+}) {
 
     const movingAvg = movingAverage(history);
 
@@ -18,76 +27,160 @@ function evaluateStrategy({ price, history, position }) {
     );
 
     // =========================
-    // BUY LOGIC
+    // SCALP MODE
     // =========================
 
-    if (!position) {
+    if (regime === "SCALP") {
 
-        // Only buy in uptrend
-        if (
-            trend === "UPTREND" &&
-            deviation <= CONFIG.BUY_THRESHOLD
-        ) {
+        // 🚀 QUICK ENTRY ON MICRO DIPS
+        if (!position) {
+
+            if (deviation <= CONFIG.SCALP_BUY_THRESHOLD) {
+
+                return {
+                    action: "BUY",
+                    reason: "Scalp dip entry",
+                    trend,
+                    deviation,
+                    regime
+                };
+            }
 
             return {
-                action: "BUY",
-                reason: "Pullback in uptrend",
+                action: "HOLD",
+                reason: "No scalp setup",
                 trend,
-                deviation
+                deviation,
+                regime
+            };
+        }
+
+        // 💰 QUICK EXIT (small targets)
+        const entryPrice = position.entryPrice;
+
+        const pnlPercent =
+            ((price - entryPrice) / entryPrice) * 100;
+
+        // Take quick profit
+        if (pnlPercent >= CONFIG.SCALP_TAKE_PROFIT) {
+
+            return {
+                action: "SELL",
+                reason: "Scalp take profit",
+                trend,
+                deviation,
+                pnlPercent,
+                regime
+            };
+        }
+
+        // Tight stop loss
+        if (pnlPercent <= -CONFIG.SCALP_STOP_LOSS) {
+
+            return {
+                action: "SELL",
+                reason: "Scalp stop loss",
+                trend,
+                deviation,
+                pnlPercent,
+                regime
             };
         }
 
         return {
             action: "HOLD",
-            reason: "No valid buy setup",
+            reason: "Managing scalp position",
             trend,
-            deviation
+            deviation,
+            pnlPercent,
+            regime
         };
     }
 
     // =========================
-    // POSITION MANAGEMENT
+    // TREND MODE
     // =========================
 
-    const entryPrice = position.entryPrice;
+    if (regime === "TREND") {
 
-    const pnlPercent =
-        ((price - entryPrice) / entryPrice) * 100;
+        // 📈 ONLY TRADE STRONG TRENDS
+        if (!position) {
 
-    // Take profit
-    if (
-        deviation >= CONFIG.SELL_THRESHOLD
-    ) {
+            if (
+                trend === "UPTREND" &&
+                deviation <= CONFIG.TREND_BUY_THRESHOLD
+            ) {
+
+                return {
+                    action: "BUY",
+                    reason: "Trend pullback entry",
+                    trend,
+                    deviation,
+                    regime
+                };
+            }
+
+            return {
+                action: "HOLD",
+                reason: "No trend setup",
+                trend,
+                deviation,
+                regime
+            };
+        }
+
+        // 📊 LONGER HOLD LOGIC
+        const entryPrice = position.entryPrice;
+
+        const pnlPercent =
+            ((price - entryPrice) / entryPrice) * 100;
+
+        // Bigger profit target
+        if (pnlPercent >= CONFIG.TREND_TAKE_PROFIT) {
+
+            return {
+                action: "SELL",
+                reason: "Trend take profit",
+                trend,
+                deviation,
+                pnlPercent,
+                regime
+            };
+        }
+
+        // Wider stop loss
+        if (pnlPercent <= -CONFIG.TREND_STOP_LOSS) {
+
+            return {
+                action: "SELL",
+                reason: "Trend stop loss",
+                trend,
+                deviation,
+                pnlPercent,
+                regime
+            };
+        }
 
         return {
-            action: "SELL",
-            reason: "Take profit hit",
+            action: "HOLD",
+            reason: "Holding trend position",
             trend,
             deviation,
-            pnlPercent
+            pnlPercent,
+            regime
         };
     }
 
-    // Stop loss
-    if (
-        pnlPercent <= -CONFIG.STOP_LOSS_PERCENT
-    ) {
-
-        return {
-            action: "SELL",
-            reason: "Stop loss hit",
-            trend,
-            deviation,
-            pnlPercent
-        };
-    }
+    // =========================
+    // SAFETY DEFAULT
+    // =========================
 
     return {
         action: "HOLD",
-        reason: "Managing open position",
+        reason: "No regime detected",
         trend,
         deviation,
-        pnlPercent
+        regime
     };
 }
 

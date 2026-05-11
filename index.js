@@ -20,6 +20,14 @@ const {
     clearPosition
 } = require("./state/positionManager");
 
+const {
+    getMarketRegime
+} = require("./utils/marketRegime");
+
+const {
+    getATR
+} = require("./utils/indicators");
+
 // =========================
 // PRICE HISTORY
 // =========================
@@ -45,43 +53,55 @@ async function runBot() {
 
     priceHistory.push(price);
 
-    // Keep rolling window size
     if (priceHistory.length > CONFIG.WINDOW) {
         priceHistory.shift();
     }
 
-    // Wait until enough data collected
     if (priceHistory.length < CONFIG.WINDOW) {
-
         console.log(
             `📊 Collecting data... (${priceHistory.length}/${CONFIG.WINDOW})`
         );
-
         return;
     }
 
     // =========================
-    // GET CURRENT POSITION
+    // MARKET REGIME
+    // =========================
+
+    const regime = getMarketRegime(priceHistory);
+
+    // =========================
+    // ATR (VOLATILITY ENGINE) 🔥
+    // =========================
+
+    const atr = getATR(priceHistory);
+
+    // =========================
+    // POSITION
     // =========================
 
     const position = getPosition();
 
     // =========================
-    // EVALUATE STRATEGY
+    // STRATEGY EVALUATION
     // =========================
 
     const signal = evaluateStrategy({
         price,
         history: priceHistory,
-        position
+        position,
+        regime,
+        atr   // 🔥 NOW INCLUDED
     });
 
     // =========================
-    // DISPLAY SIGNAL INFO
+    // LOG OUTPUT
     // =========================
 
     console.log("\n=========================");
     console.log(`💰 BTC Price: ${price}`);
+    console.log(`🧭 Mode: ${regime}`);
+    console.log(`📊 ATR: ${atr.toFixed(4)}`);
     console.log(`📈 Signal: ${signal.action}`);
     console.log(`🧠 Reason: ${signal.reason}`);
     console.log(`📊 Trend: ${signal.trend}`);
@@ -96,15 +116,14 @@ async function runBot() {
         !position
     ) {
 
-        await executeTrade(
-            "BUY",
-            price
-        );
+        await executeTrade("BUY", price);
 
         updatePosition({
             entryPrice: price,
             entryTime: Date.now(),
-            side: "LONG"
+            side: "LONG",
+            regime,
+            atr   // optional but useful for stats later
         });
 
         console.log(
@@ -121,10 +140,7 @@ async function runBot() {
         position
     ) {
 
-        await executeTrade(
-            "SELL",
-            price
-        );
+        await executeTrade("SELL", price);
 
         clearPosition();
 
@@ -134,7 +150,7 @@ async function runBot() {
     }
 
     // =========================
-    // ACTIVE POSITION DISPLAY
+    // ACTIVE POSITION
     // =========================
 
     const activePosition = getPosition();
@@ -142,10 +158,8 @@ async function runBot() {
     if (activePosition) {
 
         const pnl =
-            (
-                (price - activePosition.entryPrice)
-                / activePosition.entryPrice
-            ) * 100;
+            ((price - activePosition.entryPrice)
+            / activePosition.entryPrice) * 100;
 
         console.log(
             `🟢 Open Position | Entry: ${activePosition.entryPrice} | PnL: ${pnl.toFixed(2)}%`
@@ -159,18 +173,16 @@ async function runBot() {
     const trades = getTradeHistory();
 
     const completedTrades =
-        trades.filter(
-            trade => trade.type === "SELL"
-        );
+        trades.filter(t => t.type === "SELL");
 
     const wins =
         completedTrades.filter(
-            trade => parseFloat(trade.pnlUsd) > 0
+            t => parseFloat(t.pnlUsd) > 0
         ).length;
 
     const losses =
         completedTrades.filter(
-            trade => parseFloat(trade.pnlUsd) <= 0
+            t => parseFloat(t.pnlUsd) <= 0
         ).length;
 
     console.log("\n📊 LIVE STATS");
@@ -189,10 +201,7 @@ async function runBot() {
 // =========================
 
 console.log(
-    "🚀 Hybrid Momentum BTC Bot Started...\n"
+    "🚀 Hybrid Momentum + Scalp BTC Bot Started...\n"
 );
 
-setInterval(
-    runBot,
-    CONFIG.INTERVAL
-);
+setInterval(runBot, CONFIG.INTERVAL);

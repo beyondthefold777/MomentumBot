@@ -19,40 +19,70 @@ function getDeviation(price, average) {
     );
 }
 
-function getTrendDirection(
-    data,
-    trendWindow
-) {
+// =========================
+// TREND DIRECTION (IMPROVED)
+// =========================
+
+function getTrendDirection(data, trendWindow) {
 
     if (data.length < trendWindow) {
         return "SIDEWAYS";
     }
 
-    const recentPrices =
-        data.slice(-trendWindow);
+    const recent = data.slice(-trendWindow);
 
-    const start =
-        recentPrices[0];
-
-    const end =
-        recentPrices[recentPrices.length - 1];
+    const start = recent[0];
+    const end = recent[recent.length - 1];
 
     const percentChange =
         ((end - start) / start) * 100;
 
-    if (percentChange > 0.5) {
+    // slightly tighter logic for scalping/trend switching
+    if (percentChange > 0.4) {
         return "UPTREND";
     }
 
-    if (percentChange < -0.5) {
+    if (percentChange < -0.4) {
         return "DOWNTREND";
     }
 
     return "SIDEWAYS";
 }
 
+// =========================
+// ATR (VOLATILITY ENGINE) 🔥
+// =========================
+
+function getATR(data, period = 14) {
+
+    if (data.length < period + 1) {
+        return 0;
+    }
+
+    let trValues = [];
+
+    for (let i = 1; i < data.length; i++) {
+
+        const current = data[i];
+        const previous = data[i - 1];
+
+        const tr = Math.abs(current - previous);
+
+        trValues.push(tr);
+    }
+
+    const recentTR = trValues.slice(-period);
+
+    const atr =
+        recentTR.reduce((a, b) => a + b, 0) /
+        recentTR.length;
+
+    return atr;
+}
+
 module.exports = {
     movingAverage,
     getDeviation,
-    getTrendDirection
+    getTrendDirection,
+    getATR
 };
