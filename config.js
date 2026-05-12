@@ -6,10 +6,13 @@ module.exports = {
 
     SYMBOL: "BTC-USD",
 
-    INTERVAL: 3000, // faster reaction for scalping
+    // Faster loop for scalp reactions
+    INTERVAL: 3000,
 
-    WINDOW: 50, // more data for regime + ATR stability
+    // Candle/price memory
+    WINDOW: 50,
 
+    // Trend detection lookback
     TREND_WINDOW: 25,
 
     // =========================
@@ -19,7 +22,7 @@ module.exports = {
     TRADE_SIZE_USD: 250,
 
     // =========================
-    // LEGACY (fallback logic only)
+    // LEGACY FALLBACK SETTINGS
     // =========================
 
     BUY_THRESHOLD: -1.5,
@@ -27,24 +30,82 @@ module.exports = {
     STOP_LOSS_PERCENT: 2,
 
     // =========================
-    // SCALP MODE (ATR-based logic)
+    // ATR VOLATILITY ENGINE
     // =========================
 
-    SCALP_BUY_THRESHOLD: -0.05,
+    // Lowered so bot trades more often
+    ATR_MIN: 0.15,
 
-    ATR_MULTIPLIER_SCALP: 0.8,   // take profit scaling
-    SCALP_SL_MULTIPLIER: 0.5,    // tighter stop loss
-
-    // =========================
-    // TREND MODE (ATR-based logic)
-    // =========================
-
-    ATR_MULTIPLIER_TREND: 2.5,   // larger moves
-    TREND_SL_MULTIPLIER: 1.2,    // wider stop loss
+    // Smaller chop filter
+    CHOP_ZONE: 0.02,
 
     // =========================
-    // RISK CONTROL
+    // SCALP MODE
     // =========================
 
-    COOLDOWN_MS: 30000 // prevent overtrading
+    // Easier entry trigger
+    SCALP_ENTRY: -0.02,
+
+    // =========================
+    // ATR-BASED EXITS
+    // =========================
+
+    // Hold winners longer
+    ATR_SCALP_TP: 2.0,
+
+    // Cut losers faster
+    ATR_SCALP_SL: 0.35,
+
+    // Cooldown after scalp trades
+    SCALP_COOLDOWN: 15000,
+
+    // =========================
+    // TREND MODE
+    // =========================
+
+    ATR_TREND_TP: 2.5,
+
+    ATR_TREND_SL: 1.2,
+
+    // Ignore weak trends
+    TREND_STRENGTH_MIN: 0.4,
+
+    TREND_COOLDOWN: 60000,
+
+    // =========================
+    // TRADE QUALITY FILTERS
+    // =========================
+
+    // Lowered so system is less hesitant
+    MIN_SCALP_SCORE: 40,
+
+    MIN_TREND_SCORE: 50,
+
+    // =========================
+    // POSITION SIZING
+    // =========================
+
+    // Future ATR position sizing
+    USE_DYNAMIC_POSITION_SIZING: false,
+
+    // Future risk engine
+    RISK_PER_TRADE: 0.01,
+
+    // =========================
+    // BACKTEST SETTINGS
+    // =========================
+
+    // Simulated spread/slippage
+    SLIPPAGE: 0.0005,
+
+    // Exchange fee simulation
+    FEE_RATE: 0.001,
+
+    // =========================
+    // GLOBAL RISK CONTROLS
+    // =========================
+
+    MAX_DAILY_DRAWDOWN: 0.05,
+
+    MAX_OPEN_TRADES: 1
 };

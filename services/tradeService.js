@@ -1,9 +1,18 @@
 const CONFIG = require("../config");
+const { recordTrade } = require("../utils/adaptiveEngine");
 
-let balance = 1000;
+// =========================
+// SIMULATED EXCHANGE FEES
+// =========================
 
-let currentPosition = null;
+const FEE_RATE = 0.001; // 0.1%
 
+// =========================
+// PORTFOLIO STATE
+// =========================
+
+let cash = 1000;
+let position = null;
 let tradeHistory = [];
 
 // =========================
@@ -11,11 +20,11 @@ let tradeHistory = [];
 // =========================
 
 function getBalance() {
-    return balance;
+    return cash;
 }
 
 function getPosition() {
-    return currentPosition;
+    return position;
 }
 
 function getTradeHistory() {
@@ -23,41 +32,57 @@ function getTradeHistory() {
 }
 
 // =========================
-// BUY / SELL EXECUTION
+// EXECUTE TRADE ENGINE
 // =========================
 
-async function executeTrade(action, price) {
+async function executeTrade(action, price, metadata = {}) {
 
     // =========================
     // BUY
     // =========================
+    if (action === "BUY" && !position) {
 
-    if (
-        action === "BUY" &&
-        !currentPosition
-    ) {
+        const size = CONFIG.TRADE_SIZE_USD;
+        const fee = size * FEE_RATE;
 
-        const tradeSize = CONFIG.TRADE_SIZE_USD;
+        if (cash < size + fee) {
+            console.log("❌ Not enough cash");
+            return null;
+        }
 
-        currentPosition = {
+        cash -= (size + fee);
+
+        position = {
             entryPrice: price,
-            size: tradeSize,
-            entryTime: Date.now()
+            size,
+            feePaid: fee,
+            entryTime: Date.now(),
+
+            regime: metadata.regime || "UNKNOWN",
+            atr: metadata.atr || 0,
+            score: metadata.score || 0
         };
 
-        balance -= tradeSize;
-
         const trade = {
+            id: Date.now(),
             type: "BUY",
             price,
-            size: tradeSize,
+            size,
+            fee,
+
+            regime: position.regime,
+            atr: position.atr,
+            score: position.score,
+
             timestamp: Date.now()
         };
 
         tradeHistory.push(trade);
 
+        console.log("🟢 BUY TRADE:", trade);
+
         console.log(
-            `🟢 PAPER BUY | BTC: ${price} | Size: $${tradeSize}`
+            `🟢 BUY | ${price} | $${size} | Fee: ${fee.toFixed(2)} | Score: ${position.score}`
         );
 
         return trade;
@@ -66,43 +91,76 @@ async function executeTrade(action, price) {
     // =========================
     // SELL
     // =========================
+    if (action === "SELL" && position) {
 
-    if (
-        action === "SELL" &&
-        currentPosition
-    ) {
+        const entry = position.entryPrice;
+        const size = position.size;
 
-        const entryPrice = currentPosition.entryPrice;
+        const priceChange = (price - entry) / entry;
+        let pnl = size * priceChange;
 
-        const pnlPercent =
-            ((price - entryPrice) / entryPrice);
+        const fee = size * FEE_RATE;
+        pnl -= fee;
 
-        const pnlUsd =
-            currentPosition.size * pnlPercent;
+        cash += size + pnl;
 
-        balance += currentPosition.size + pnlUsd;
+        const duration =
+            (Date.now() - position.entryTime) / 60000;
 
+        // =========================
+        // CLEAN TRADE OBJECT (CRITICAL FIX)
+        // =========================
         const trade = {
+            id: Date.now(),
             type: "SELL",
             price,
-            pnlUsd: pnlUsd.toFixed(2),
-            pnlPercent: (pnlPercent * 100).toFixed(2),
+
+            pnlUsd: pnl,
+            pnlPercent: priceChange * 100,
+
+            fee,
+            durationMinutes: duration,
+
+            regime: position.regime,
+            atr: position.atr,
+            score: position.score,
+
+            entryPrice: entry,
             timestamp: Date.now()
         };
 
         tradeHistory.push(trade);
 
+        // =========================
+        // FEED LEARNING SYSTEM
+        // =========================
+
+        recordTrade({
+            pnlUsd: pnl,
+            regime: position.regime
+        });
+
+        console.log("🔴 SELL TRADE:", trade);
+
         console.log(
-            `🔴 PAPER SELL | BTC: ${price} | PnL: $${pnlUsd.toFixed(2)} (${(pnlPercent * 100).toFixed(2)}%)`
+            `🔴 SELL | ${price} | PnL: $${pnl.toFixed(2)} (${(priceChange * 100).toFixed(2)}%)`
         );
 
-        currentPosition = null;
+        console.log(
+            `⏱ Duration: ${duration.toFixed(2)} min`
+        );
+
+        position = null;
 
         return trade;
     }
 
     return null;
 }
+
+// =========================
+// EXPORTS
+// =========================
 
 module.exports = {
     executeTrade,

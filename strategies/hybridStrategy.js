@@ -7,14 +7,16 @@ const {
 } = require("../utils/indicators");
 
 // =========================
-// STRATEGY ENGINE (SCALP + TREND)
+// STRATEGY ENGINE v4
+// NO SCORING - PURE STRUCTURE
 // =========================
 
 function evaluateStrategy({
     price,
     history,
     position,
-    regime
+    regime,
+    atr
 }) {
 
     const movingAvg = movingAverage(history);
@@ -26,23 +28,51 @@ function evaluateStrategy({
         CONFIG.TREND_WINDOW
     );
 
+    const atrPercent = (atr / price) * 100;
+
+    // =========================
+    // BASIC SAFETY FILTERS ONLY
+    // =========================
+
+    const isLowVol =
+        atr < CONFIG.ATR_MIN;
+
+    const isDeadMarket =
+        Math.abs(deviation) < CONFIG.CHOP_ZONE;
+
+    if (!position && isLowVol && isDeadMarket) {
+        return {
+            action: "HOLD",
+            reason: "Low volatility chop",
+            trend,
+            deviation,
+            regime
+        };
+    }
+
     // =========================
     // SCALP MODE
     // =========================
 
     if (regime === "SCALP") {
 
-        // 🚀 QUICK ENTRY ON MICRO DIPS
+        // =========================
+        // ENTRY RULE (simple)
+        // =========================
+
         if (!position) {
 
-            if (deviation <= CONFIG.SCALP_BUY_THRESHOLD) {
-
+            if (
+                deviation <= CONFIG.SCALP_ENTRY
+                || deviation <= -0.03
+            ) {
                 return {
                     action: "BUY",
                     reason: "Scalp dip entry",
                     trend,
                     deviation,
-                    regime
+                    regime,
+                    atr
                 };
             }
 
@@ -55,34 +85,50 @@ function evaluateStrategy({
             };
         }
 
-        // 💰 QUICK EXIT (small targets)
-        const entryPrice = position.entryPrice;
+        // =========================
+        // POSITION MANAGEMENT
+        // =========================
 
-        const pnlPercent =
-            ((price - entryPrice) / entryPrice) * 100;
+        const pnl =
+            ((price - position.entryPrice) / position.entryPrice) * 100;
 
-        // Take quick profit
-        if (pnlPercent >= CONFIG.SCALP_TAKE_PROFIT) {
+        // =========================
+        // FIXED EXIT SYSTEM
+        // =========================
 
+        const stopLoss = -(atrPercent * CONFIG.ATR_SCALP_SL);
+        const takeProfit = atrPercent * CONFIG.ATR_SCALP_TP;
+
+        // 🚨 BREAKEVEN LOGIC
+        if (pnl > 0.5) {
+            position.stopLossMovedToBE = true;
+        }
+
+        if (position.stopLossMovedToBE && pnl <= 0) {
             return {
                 action: "SELL",
-                reason: "Scalp take profit",
-                trend,
-                deviation,
-                pnlPercent,
+                reason: "Breakeven stop hit",
+                pnl,
                 regime
             };
         }
 
-        // Tight stop loss
-        if (pnlPercent <= -CONFIG.SCALP_STOP_LOSS) {
-
+        // STOP LOSS
+        if (pnl <= stopLoss) {
             return {
                 action: "SELL",
-                reason: "Scalp stop loss",
-                trend,
-                deviation,
-                pnlPercent,
+                reason: "ATR stop loss",
+                pnl,
+                regime
+            };
+        }
+
+        // TAKE PROFIT
+        if (pnl >= takeProfit) {
+            return {
+                action: "SELL",
+                reason: "ATR take profit",
+                pnl,
                 regime
             };
         }
@@ -90,9 +136,7 @@ function evaluateStrategy({
         return {
             action: "HOLD",
             reason: "Managing scalp position",
-            trend,
-            deviation,
-            pnlPercent,
+            pnl,
             regime
         };
     }
@@ -103,20 +147,26 @@ function evaluateStrategy({
 
     if (regime === "TREND") {
 
-        // 📈 ONLY TRADE STRONG TRENDS
+        const trendStrong =
+            Math.abs(deviation) > CONFIG.TREND_STRENGTH_MIN;
+
+        // =========================
+        // ENTRY RULE
+        // =========================
+
         if (!position) {
 
             if (
                 trend === "UPTREND" &&
-                deviation <= CONFIG.TREND_BUY_THRESHOLD
+                trendStrong
             ) {
-
                 return {
                     action: "BUY",
-                    reason: "Trend pullback entry",
+                    reason: "Trend entry",
                     trend,
                     deviation,
-                    regime
+                    regime,
+                    atr
                 };
             }
 
@@ -129,34 +179,44 @@ function evaluateStrategy({
             };
         }
 
-        // 📊 LONGER HOLD LOGIC
-        const entryPrice = position.entryPrice;
+        // =========================
+        // POSITION MANAGEMENT
+        // =========================
 
-        const pnlPercent =
-            ((price - entryPrice) / entryPrice) * 100;
+        const pnl =
+            ((price - position.entryPrice) / position.entryPrice) * 100;
 
-        // Bigger profit target
-        if (pnlPercent >= CONFIG.TREND_TAKE_PROFIT) {
+        const stopLoss = -(atrPercent * CONFIG.ATR_TREND_SL);
+        const takeProfit = atrPercent * CONFIG.ATR_TREND_TP;
 
+        // 🚨 BREAKEVEN LOGIC
+        if (pnl > 1) {
+            position.stopLossMovedToBE = true;
+        }
+
+        if (position.stopLossMovedToBE && pnl <= 0) {
             return {
                 action: "SELL",
-                reason: "Trend take profit",
-                trend,
-                deviation,
-                pnlPercent,
+                reason: "Trend breakeven stop",
+                pnl,
                 regime
             };
         }
 
-        // Wider stop loss
-        if (pnlPercent <= -CONFIG.TREND_STOP_LOSS) {
-
+        if (pnl <= stopLoss) {
             return {
                 action: "SELL",
                 reason: "Trend stop loss",
-                trend,
-                deviation,
-                pnlPercent,
+                pnl,
+                regime
+            };
+        }
+
+        if (pnl >= takeProfit) {
+            return {
+                action: "SELL",
+                reason: "Trend take profit",
+                pnl,
                 regime
             };
         }
@@ -164,20 +224,18 @@ function evaluateStrategy({
         return {
             action: "HOLD",
             reason: "Holding trend position",
-            trend,
-            deviation,
-            pnlPercent,
+            pnl,
             regime
         };
     }
 
     // =========================
-    // SAFETY DEFAULT
+    // DEFAULT
     // =========================
 
     return {
         action: "HOLD",
-        reason: "No regime detected",
+        reason: "No setup",
         trend,
         deviation,
         regime
