@@ -1,376 +1,286 @@
-require("dotenv").config();
-
 const CONFIG = require("../config");
 
-const { fetchOHLCV } = require("./data");
-
-const {
-    buy,
-    sell,
-    getBalance,
-    getPosition,
-    getTrades
-} = require("./broker");
-
-const {
-    calculateStats
-} = require("./metrics");
-
-const {
-    evaluateStrategy
-} = require("../strategies/hybridStrategy");
-
-const {
-    getMarketRegime
-} = require("../utils/marketRegime");
-
-const {
-    getATR
-} = require("../utils/indicators");
+const { fetchHistoricalOHLCV } = require("./data");
+const { evaluateStrategy }     = require("../strategies/hybridStrategy");
+const { getMarketRegime }      = require("../utils/marketRegime");
+const { getATR }               = require("../utils/indicators");
 
 // =========================
-// BACKTEST ENGINE v2
-// ADVANCED ANALYTICS
+// CONSTANTS
+// =========================
+
+const FEE_RATE   = CONFIG.FEE_RATE       || 0.001;
+const SLIPPAGE   = CONFIG.SLIPPAGE       || 0.0005;
+const TRADE_SIZE = CONFIG.TRADE_SIZE_USD || 250;
+
+// SCALP_TIME_STOP is in candles (hours on 1h chart)
+// e.g. 8 = close after 8 candles = 8 hours on 1h data
+const TIME_STOP_CANDLES = CONFIG.SCALP_TIME_STOP || 8;
+
+// =========================
+// BACKTEST RUNNER
 // =========================
 
 async function runBacktest() {
 
-    console.log("🚀 Starting Backtest...\n");
+    // -------------------------------------------------------
+    // 1. FETCH DATA
+    // -------------------------------------------------------
 
-    const candles = await fetchOHLCV();
+    const candles = await fetchHistoricalOHLCV({
+        pair:         "XBTUSD",
+        interval:     CONFIG.BACKTEST_INTERVAL || 60,
+        targetCandles: CONFIG.BACKTEST_CANDLES || 720
+    });
 
-    let priceHistory = [];
-
-    // =========================
-    // EQUITY TRACKING
-    // =========================
-
-    let equityCurve = [];
-
-    let peakBalance =
-        getBalance();
-
-    let maxDrawdown = 0;
-
-    // =========================
-    // MAIN LOOP
-    // =========================
-
-    for (let i = 0; i < candles.length; i++) {
-
-        const candle = candles[i];
-
-        const price = candle.close;
-
-        // =========================
-        // STORE PRICE HISTORY
-        // =========================
-
-        priceHistory.push(price);
-
-        if (priceHistory.length > CONFIG.WINDOW) {
-            priceHistory.shift();
-        }
-
-        // wait for enough data
-        if (priceHistory.length < CONFIG.WINDOW) {
-            continue;
-        }
-
-        // =========================
-        // MARKET CONDITIONS
-        // =========================
-
-        const regime =
-            getMarketRegime(priceHistory);
-
-        const atr =
-            getATR(priceHistory);
-
-        const position =
-            getPosition();
-
-        // =========================
-        // STRATEGY SIGNAL
-        // =========================
-
-        const signal =
-            evaluateStrategy({
-                price,
-                history: priceHistory,
-                position,
-                regime,
-                atr
-            });
-
-        // =========================
-        // BUY
-        // =========================
-
-        if (
-            signal.action === "BUY" &&
-            !position
-        ) {
-
-            buy(
-                price,
-                CONFIG.TRADE_SIZE_USD,
-                {
-                    regime,
-                    atr,
-                    score: signal.score,
-                    time: candle.time
-                }
-            );
-        }
-
-        // =========================
-        // SELL
-        // =========================
-
-        if (
-            signal.action === "SELL" &&
-            position
-        ) {
-
-            sell(
-                price,
-                {
-                    regime,
-                    atr,
-                    score: signal.score,
-                    time: candle.time
-                }
-            );
-        }
-
-        // =========================
-        // EQUITY CURVE
-        // =========================
-
-        const balance =
-            getBalance();
-
-        equityCurve.push(balance);
-
-        // =========================
-        // MAX DRAWDOWN
-        // =========================
-
-        if (balance > peakBalance) {
-            peakBalance = balance;
-        }
-
-        const drawdown =
-            (
-                (peakBalance - balance)
-                / peakBalance
-            ) * 100;
-
-        if (drawdown > maxDrawdown) {
-            maxDrawdown = drawdown;
-        }
+    if (candles.length < CONFIG.WINDOW + 50) {
+        console.error(`Not enough candles (${candles.length}). Need at least ${CONFIG.WINDOW + 50}.`);
+        return;
     }
 
-    // =========================
-    // FINAL STATS
-    // =========================
+    const priceHistory = candles.map(c => c.close);
 
-    const trades =
-        getTrades();
+    console.log(`📈 Running backtest on ${priceHistory.length} candles...\n`);
 
-    const stats =
-        calculateStats(
-            trades,
-            getBalance()
-        );
+    // -------------------------------------------------------
+    // 2. STATE
+    // -------------------------------------------------------
 
-    // =========================
-    // ADVANCED METRICS
-    // =========================
+    let balance     = 1000;
+    let position    = null;
+    let trades      = [];
+    let peakBalance = balance;
+    let maxDrawdown = 0;
+    let scalpTrades = 0;
+    let trendTrades = 0;
 
-    const completedTrades =
-        trades.filter(
-            t => t.type === "SELL"
-        );
+    // -------------------------------------------------------
+    // 3. LOOP
+    // -------------------------------------------------------
 
-    const winningTrades =
-        completedTrades.filter(
-            t => parseFloat(t.pnlUsd) > 0
-        );
+    for (let i = CONFIG.WINDOW; i < priceHistory.length; i++) {
 
-    const losingTrades =
-        completedTrades.filter(
-            t => parseFloat(t.pnlUsd) <= 0
-        );
+        const window = priceHistory.slice(i - CONFIG.WINDOW, i);
+        const price  = priceHistory[i];
+        const time   = candles[i].time;
 
-    // =========================
-    // AVG WINNER
-    // =========================
+        const regime = getMarketRegime(window);
+        const atr    = getATR(window);
 
-    const avgWinner =
-        winningTrades.length > 0
-            ? (
-                winningTrades.reduce(
-                    (acc, t) =>
-                        acc + parseFloat(t.pnlUsd),
-                    0
-                ) / winningTrades.length
-            ).toFixed(2)
-            : 0;
+        // -------------------------------------------------------
+        // TIME STOP — measured in candles, not minutes
+        // Fires BEFORE evaluating new signal so we don't
+        // re-enter on the same candle we just closed
+        // -------------------------------------------------------
 
-    // =========================
-    // AVG LOSER
-    // =========================
+        if (position && position.regime === "SCALP") {
+            const ageCandles = i - position.entryIndex;
+            if (ageCandles >= TIME_STOP_CANDLES) {
+                const result = closeTrade(position, price, time, "Time stop");
+                balance += TRADE_SIZE + result.pnlUsd;
+                trades.push(result);
 
-    const avgLoser =
-        losingTrades.length > 0
-            ? (
-                losingTrades.reduce(
-                    (acc, t) =>
-                        acc + Math.abs(parseFloat(t.pnlUsd)),
-                    0
-                ) / losingTrades.length
-            ).toFixed(2)
-            : 0;
+                if (CONFIG.VERBOSE) logSell(position, result);
 
-    // =========================
-    // PROFIT FACTOR
-    // =========================
+                position = null;
+                continue; // skip entry logic this candle
+            }
+        }
 
-    const grossProfit =
-        winningTrades.reduce(
-            (acc, t) =>
-                acc + parseFloat(t.pnlUsd),
-            0
-        );
+        // -------------------------------------------------------
+        // EVALUATE SIGNAL
+        // -------------------------------------------------------
 
-    const grossLoss =
-        losingTrades.reduce(
-            (acc, t) =>
-                acc + Math.abs(parseFloat(t.pnlUsd)),
-            0
-        );
+        const signal = evaluateStrategy({
+            price,
+            history:  window,
+            position: position ? { ...position } : null,
+            regime,
+            atr
+        });
 
-    const profitFactor =
-        grossLoss > 0
-            ? (
-                grossProfit / grossLoss
-            ).toFixed(2)
-            : 0;
+        // -------------------------------------------------------
+        // BUY — only if flat
+        // -------------------------------------------------------
 
-    // =========================
-    // EXPECTANCY
-    // =========================
+        if (signal.action === "BUY" && !position) {
 
-    const expectancy =
-        completedTrades.length > 0
-            ? (
-                stats.totalPnL
-                / completedTrades.length
-            ).toFixed(2)
-            : 0;
+            const fillPrice = price * (1 + SLIPPAGE);
+            const fee       = TRADE_SIZE * FEE_RATE;
 
-    // =========================
-    // AVG TRADE DURATION
-    // =========================
+            position = {
+                entryPrice:  fillPrice,
+                size:        TRADE_SIZE,
+                entryTime:   time,
+                entryIndex:  i,       // track candle index for time stop
+                regime:      regime,
+                fee:         fee
+            };
 
-    const avgDuration =
-        completedTrades.length > 0
-            ? (
-                completedTrades.reduce(
-                    (acc, t) =>
-                        acc + (
-                            parseFloat(
-                                t.durationMinutes || 0
-                            )
-                        ),
-                    0
-                ) / completedTrades.length
-            ).toFixed(2)
-            : 0;
+            balance -= fee;
 
-    // =========================
-    // REGIME ANALYSIS
-    // =========================
+            if (regime === "SCALP") scalpTrades++;
+            if (regime === "TREND") trendTrades++;
 
-    const scalpTrades =
-        completedTrades.filter(
-            t => t.regime === "SCALP"
-        );
+            if (CONFIG.VERBOSE) {
+                console.log(
+                    `🟢 BUY  [${regime}] @ $${price.toFixed(0)}` +
+                    ` | ATR: ${atr.toFixed(0)}` +
+                    ` | Score: ${signal.score || signal.trendScore || '-'}` +
+                    ` | ${new Date(time * 1000).toISOString().slice(0, 16)}`
+                );
+            }
+        }
 
-    const trendTrades =
-        completedTrades.filter(
-            t => t.regime === "TREND"
-        );
+        // -------------------------------------------------------
+        // SELL — only if in position
+        // -------------------------------------------------------
 
-    // =========================
-    // RESULTS
-    // =========================
+        if (signal.action === "SELL" && position) {
+
+            const result = closeTrade(position, price, time, signal.reason);
+            balance += TRADE_SIZE + result.pnlUsd;
+            trades.push(result);
+
+            if (CONFIG.VERBOSE) logSell(position, result);
+
+            position = null;
+        }
+
+        // -------------------------------------------------------
+        // DRAWDOWN TRACKING
+        // -------------------------------------------------------
+
+        if (balance > peakBalance) peakBalance = balance;
+        const dd = ((peakBalance - balance) / peakBalance) * 100;
+        if (dd > maxDrawdown) maxDrawdown = dd;
+    }
+
+    // -------------------------------------------------------
+    // 4. FORCE-CLOSE OPEN POSITION AT END OF DATA
+    // -------------------------------------------------------
+
+    if (position) {
+        const lastPrice = priceHistory.at(-1);
+        const lastTime  = candles.at(-1).time;
+        const result    = closeTrade(position, lastPrice, lastTime, "End of data");
+        balance += TRADE_SIZE + result.pnlUsd;
+        trades.push(result);
+        if (CONFIG.VERBOSE) logSell(position, result);
+        console.log(`⚠️  Force-closed open position at end of data.`);
+    }
+
+    // -------------------------------------------------------
+    // 5. RESULTS
+    // -------------------------------------------------------
+
+    printResults({ trades, balance, maxDrawdown, scalpTrades, trendTrades, candles, priceHistory });
+}
+
+// =========================
+// HELPERS
+// =========================
+
+function closeTrade(position, price, time, reason = "") {
+    const fillPrice = price * (1 - SLIPPAGE);
+    const pnlRaw    = ((fillPrice - position.entryPrice) / position.entryPrice) * position.size;
+    const fee       = position.size * FEE_RATE;
+    const pnlUsd    = pnlRaw - fee;
+    const pnlPct    = ((fillPrice - position.entryPrice) / position.entryPrice) * 100;
+    const duration  = (time - position.entryTime) / 60;
+
+    return {
+        entryPrice:      position.entryPrice,
+        exitPrice:       fillPrice,
+        pnlUsd,
+        pnlPct,
+        durationMinutes: duration,
+        regime:          position.regime,
+        reason,
+        entryTime:       position.entryTime,
+        exitTime:        time
+    };
+}
+
+function logSell(position, result) {
+    const pnlStr = result.pnlUsd >= 0
+        ? `+$${result.pnlUsd.toFixed(2)}`
+        : `-$${Math.abs(result.pnlUsd).toFixed(2)}`;
+
+    console.log(
+        `🔴 SELL [${position.regime}] @ $${result.exitPrice.toFixed(0)}` +
+        ` | PnL: ${pnlStr} (${result.pnlPct.toFixed(3)}%)` +
+        ` | Reason: ${result.reason}` +
+        ` | ${result.durationMinutes.toFixed(0)}min`
+    );
+}
+
+// =========================
+// PRINT RESULTS
+// =========================
+
+function printResults({ trades, balance, maxDrawdown, scalpTrades, trendTrades, candles, priceHistory }) {
+
+    const wins      = trades.filter(t => t.pnlUsd > 0);
+    const losses    = trades.filter(t => t.pnlUsd <= 0);
+    const totalPnL  = trades.reduce((a, t) => a + t.pnlUsd, 0);
+    const grossWins = wins.reduce((a, t) => a + t.pnlUsd, 0);
+    const grossLoss = Math.abs(losses.reduce((a, t) => a + t.pnlUsd, 0));
+
+    const winRate      = trades.length ? (wins.length / trades.length) * 100 : 0;
+    const profitFactor = grossLoss > 0 ? grossWins / grossLoss : Infinity;
+    const expectancy   = trades.length ? totalPnL / trades.length : 0;
+    const avgWin       = wins.length   ? grossWins / wins.length   : 0;
+    const avgLoss      = losses.length ? grossLoss / losses.length : 0;
+    const avgDuration  = trades.length
+        ? trades.reduce((a, t) => a + t.durationMinutes, 0) / trades.length
+        : 0;
+
+    const fromDate = new Date(candles[0].time * 1000).toISOString().slice(0, 10);
+    const toDate   = new Date(candles.at(-1).time * 1000).toISOString().slice(0, 10);
+    const bah      = ((priceHistory.at(-1) - priceHistory[0]) / priceHistory[0]) * 100;
+
+    const reasons = {};
+    trades.forEach(t => {
+        if (!t.reason) return;
+        reasons[t.reason] = (reasons[t.reason] || 0) + 1;
+    });
 
     console.log("\n=========================");
     console.log("📊 BACKTEST RESULTS");
-
-    console.log(
-        `Trades: ${stats.trades}`
-    );
-
-    console.log(
-        `Wins: ${stats.wins}`
-    );
-
-    console.log(
-        `Losses: ${stats.losses}`
-    );
-
-    console.log(
-        `Win Rate: ${stats.winRate}%`
-    );
-
-    console.log(
-        `Total PnL: $${stats.totalPnL}`
-    );
-
-    console.log(
-        `Final Balance: $${stats.finalBalance}`
-    );
-
-    console.log(
-        `Max Drawdown: ${maxDrawdown.toFixed(2)}%`
-    );
-
-    console.log(
-        `Profit Factor: ${profitFactor}`
-    );
-
-    console.log(
-        `Expectancy Per Trade: $${expectancy}`
-    );
-
-    console.log(
-        `Average Winner: $${avgWinner}`
-    );
-
-    console.log(
-        `Average Loser: -$${avgLoser}`
-    );
-
-    console.log(
-        `Average Trade Duration: ${avgDuration} min`
-    );
-
-    console.log(
-        `SCALP Trades: ${scalpTrades.length}`
-    );
-
-    console.log(
-        `TREND Trades: ${trendTrades.length}`
-    );
-
-    console.log("\n📌 Open Position:");
-    console.log(getPosition());
-
+    console.log(`Period:            ${fromDate} → ${toDate}`);
+    console.log(`Candles:           ${priceHistory.length}`);
     console.log("=========================");
+    console.log(`Trades:            ${trades.length}`);
+    console.log(`Wins:              ${wins.length}`);
+    console.log(`Losses:            ${losses.length}`);
+    console.log(`Win Rate:          ${winRate.toFixed(2)}%`);
+    console.log("---------");
+    console.log(`Total PnL:         $${totalPnL.toFixed(2)}`);
+    console.log(`Final Balance:     $${balance.toFixed(2)}`);
+    console.log(`Max Drawdown:      ${maxDrawdown.toFixed(2)}%`);
+    console.log(`Profit Factor:     ${profitFactor.toFixed(2)}`);
+    console.log(`Expectancy/Trade:  $${expectancy.toFixed(2)}`);
+    console.log("---------");
+    console.log(`Avg Winner:        $${avgWin.toFixed(2)}`);
+    console.log(`Avg Loser:         -$${avgLoss.toFixed(2)}`);
+    console.log(`Avg Duration:      ${(avgDuration / 60).toFixed(1)} hrs`);
+    console.log("---------");
+    console.log(`SCALP Trades:      ${scalpTrades}`);
+    console.log(`TREND Trades:      ${trendTrades}`);
+    console.log("---------");
+    console.log(`Buy & Hold:        ${bah.toFixed(2)}%`);
+    console.log("=========================");
+
+    if (Object.keys(reasons).length) {
+        console.log("\n📋 Exit reason breakdown:");
+        Object.entries(reasons)
+            .sort((a, b) => b[1] - a[1])
+            .forEach(([r, n]) => console.log(`   ${n}x  ${r}`));
+    }
+
+    console.log(`\n💰 Open Position: null`);
 }
 
-runBacktest();
+module.exports = { runBacktest };
+runBacktest().catch(console.error);

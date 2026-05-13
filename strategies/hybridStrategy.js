@@ -13,6 +13,12 @@ const {
 // SMART SCALP SCORING
 // =========================
 
+// Round-trip cost as a % — used to
+// offset pnl thresholds so decisions
+// are made on NET position, not gross
+const ROUND_TRIP_COST =
+    (CONFIG.FEE_RATE + CONFIG.SLIPPAGE) * 2 * 100;
+
 function evaluateStrategy({
     price,
     history,
@@ -98,10 +104,7 @@ function evaluateStrategy({
             // PULLBACK / DEVIATION
             // =========================
 
-            if (
-                deviation <=
-                CONFIG.SCALP_ENTRY
-            ) {
+            if (deviation <= CONFIG.SCALP_ENTRY) {
                 score += 1;
             }
 
@@ -120,26 +123,34 @@ function evaluateStrategy({
             // RSI OVERSOLD
             // =========================
 
-            if (
-                rsi <= CONFIG.RSI_OVERSOLD
-            ) {
+            if (rsi <= CONFIG.RSI_OVERSOLD) {
                 score += 2;
             }
 
             // =========================
             // RSI MOMENTUM REVERSAL
-            // VERY IMPORTANT
+            //
+            // Fix: guard the slice so it's
+            // always long enough for the
+            // smoothed RSI warmup period.
+            // Old: history.slice(0, -1) on a
+            // 50-bar window could be too short
+            // after getRSI needs period*3+1 bars.
             // =========================
 
+            const minRSIBars =
+                (CONFIG.RSI_PERIOD || 14) * 3 + 2;
+
             const previousRSI =
-                getRSI(
-                    history.slice(0, -1),
-                    CONFIG.RSI_PERIOD || 14
-                );
+                history.length > minRSIBars
+                    ? getRSI(
+                        history.slice(0, -1),
+                        CONFIG.RSI_PERIOD || 14
+                    )
+                    : rsi; // not enough history — treat as flat (no reversal)
 
             const rsiReversal =
-                previousRSI <
-                CONFIG.RSI_OVERSOLD &&
+                previousRSI < CONFIG.RSI_OVERSOLD &&
                 rsi > previousRSI;
 
             if (rsiReversal) {
@@ -158,11 +169,7 @@ function evaluateStrategy({
             // ENTRY THRESHOLD
             // =========================
 
-            if (
-                score >=
-                CONFIG.SCALP_SCORE_THRESHOLD
-            ) {
-
+            if (score >= CONFIG.SCALP_SCORE_THRESHOLD) {
                 return {
                     action: "BUY",
                     reason: "RSI scalp reversal entry",
@@ -196,43 +203,42 @@ function evaluateStrategy({
 
         // =========================
         // POSITION MANAGEMENT
+        //
+        // pnl here is gross (no fees).
+        // Thresholds are offset by
+        // ROUND_TRIP_COST so all
+        // decisions reflect net reality.
+        // e.g. breakeven trigger at 0.35%
+        // gross = ~0.05% net after ~0.3%
+        // round-trip — nearly breakeven,
+        // which is the intent.
         // =========================
 
         const pnl =
-            (
-                (
-                    price -
-                    position.entryPrice
-                ) /
-                position.entryPrice
-            ) * 100;
-
-        // =========================
-        // IMPROVED RISK MODEL
-        // =========================
+            ((price - position.entryPrice) / position.entryPrice) * 100;
 
         const stopLoss =
-            -(
-                atrPercent *
-                CONFIG.ATR_SCALP_SL
-            );
+            -(atrPercent * CONFIG.ATR_SCALP_SL);
 
         const takeProfit =
-            atrPercent *
-            CONFIG.ATR_SCALP_TP;
+            atrPercent * CONFIG.ATR_SCALP_TP;
 
         // =========================
         // TRAILING BREAKEVEN
+        // Trigger once gross pnl covers
+        // round-trip cost + small buffer
         // =========================
 
-        if (pnl >= 0.35) {
+        const beActivationThreshold =
+            ROUND_TRIP_COST + 0.10; // must clear fees before locking in
+
+        if (pnl >= beActivationThreshold) {
             position.stopLossMovedToBE = true;
         }
 
-        // lock profit instead of full BE dump
         if (
             position.stopLossMovedToBE &&
-            pnl <= 0.10
+            pnl <= ROUND_TRIP_COST  // exit if we've given back to fee-breakeven
         ) {
             return {
                 action: "SELL",
@@ -257,10 +263,12 @@ function evaluateStrategy({
 
         // =========================
         // RSI OVERBOUGHT EXIT
+        // Require pnl to exceed fees
+        // before allowing RSI exit
         // =========================
 
         if (
-            pnl > 0.25 &&
+            pnl > ROUND_TRIP_COST + 0.15 &&
             rsi >= CONFIG.RSI_OVERBOUGHT
         ) {
             return {
@@ -324,10 +332,7 @@ function evaluateStrategy({
                 trendScore += 1;
             }
 
-            if (
-                trendScore >=
-                CONFIG.TREND_SCORE_THRESHOLD
-            ) {
+            if (trendScore >= CONFIG.TREND_SCORE_THRESHOLD) {
                 return {
                     action: "BUY",
                     reason: "Trend momentum entry",
@@ -360,35 +365,29 @@ function evaluateStrategy({
         // =========================
 
         const pnl =
-            (
-                (
-                    price -
-                    position.entryPrice
-                ) /
-                position.entryPrice
-            ) * 100;
+            ((price - position.entryPrice) / position.entryPrice) * 100;
 
         const stopLoss =
-            -(
-                atrPercent *
-                CONFIG.ATR_TREND_SL
-            );
+            -(atrPercent * CONFIG.ATR_TREND_SL);
 
         const takeProfit =
-            atrPercent *
-            CONFIG.ATR_TREND_TP;
+            atrPercent * CONFIG.ATR_TREND_TP;
 
         // =========================
         // TREND TRAILING STOP
+        // Same cost-awareness as scalp
         // =========================
 
-        if (pnl >= 1) {
+        const trendBEThreshold =
+            ROUND_TRIP_COST + 0.75; // trend needs more room before locking
+
+        if (pnl >= trendBEThreshold) {
             position.stopLossMovedToBE = true;
         }
 
         if (
             position.stopLossMovedToBE &&
-            pnl <= 0.25
+            pnl <= ROUND_TRIP_COST
         ) {
             return {
                 action: "SELL",
@@ -416,7 +415,7 @@ function evaluateStrategy({
         // =========================
 
         if (
-            pnl > 0.75 &&
+            pnl > ROUND_TRIP_COST + 0.50 &&
             rsi >= 75
         ) {
             return {
