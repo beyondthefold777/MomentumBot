@@ -43,6 +43,8 @@ module.exports = {
 
     SCALP_SCORE_THRESHOLD: 3,
 
+    SCALP_TIME_STOP: 120,
+
     // ATR-based exits (scaled to BTC properly)
     ATR_SCALP_TP: 1.4,    // was 0.9
 ATR_SCALP_SL: 2.0,    // was 2.4, tighten slightly
@@ -54,6 +56,7 @@ ATR_SCALP_SL: 2.0,    // was 2.4, tighten slightly
     // =========================
 
     TREND_STRENGTH_MIN: 0.5,
+    
 
     SCALP_SCORE_WEIGHT: 1,
     TREND_SCORE_WEIGHT: 1,

@@ -32,7 +32,6 @@ function buy(price, size, meta = {}) {
 
     balance -= (size + fee);
 
-    // 🔥 FIX: normalize time to milliseconds
     const entryTime =
         meta.time ? meta.time * 1000 : Date.now();
 
@@ -80,14 +79,20 @@ function sell(price, meta = {}) {
 
     balance += position.size + pnl;
 
+    // =========================
+    // FIX: use candle time not Date.now()
+    // =========================
+
+    const exitTime =
+        meta.time ? meta.time * 1000 : Date.now();
+
     const duration =
-        (Date.now() - position.entryTime) / 60000;
+        (exitTime - position.entryTime) / 60000;
 
     const trade = {
         type: "SELL",
         price: fillPrice,
 
-        // unified numeric fields
         pnlUsd: pnl,
         pnlPct: priceChange * 100,
 
@@ -101,7 +106,7 @@ function sell(price, meta = {}) {
         entryPrice: position.entryPrice,
         entryTime: position.entryTime,
 
-        timestamp: Date.now()
+        timestamp: exitTime
     };
 
     trades.push(trade);
