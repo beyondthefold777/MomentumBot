@@ -39,13 +39,13 @@ module.exports = {
     // SCALP MODE
     // =========================
 
-    SCALP_ENTRY: -0.25,
+    SCALP_ENTRY: -0.35,        // was -0.25, deeper pullback required
 
     SCALP_SCORE_THRESHOLD: 3,
 
     // ATR-based exits (scaled to BTC properly)
-    ATR_SCALP_TP: 2.4,
-    ATR_SCALP_SL: .9,
+    ATR_SCALP_TP: 1.4,    // was 0.9
+ATR_SCALP_SL: 2.0,    // was 2.4, tighten slightly
 
     SCALP_COOLDOWN: 15000,
 
