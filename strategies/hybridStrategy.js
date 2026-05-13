@@ -8,8 +8,9 @@ const {
 } = require("../utils/indicators");
 
 // =========================
-// STRATEGY ENGINE v5
-// SCORING + FILTERED SCALPING
+// STRATEGY ENGINE v6
+// RSI MOMENTUM REVERSAL +
+// SMART SCALP SCORING
 // =========================
 
 function evaluateStrategy({
@@ -20,74 +21,157 @@ function evaluateStrategy({
     atr
 }) {
 
-    const movingAvg = movingAverage(history);
-    const deviation = getDeviation(price, movingAvg);
-    const trend = getTrendDirection(history, CONFIG.TREND_WINDOW);
+    const movingAvg =
+        movingAverage(history);
 
-    const atrPercent = (atr / price) * 100;
+    const deviation =
+        getDeviation(price, movingAvg);
+
+    const trend =
+        getTrendDirection(
+            history,
+            CONFIG.TREND_WINDOW
+        );
+
+    const atrPercent =
+        (atr / price) * 100;
 
     // =========================
-    // RSI (NEW)
-    // =========================
-    const rsi = getRSI(history, CONFIG.RSI_PERIOD || 14);
-
-    // =========================
-    // BASIC SAFETY FILTERS
+    // RSI
     // =========================
 
-    const isLowVol = atr < CONFIG.ATR_MIN;
+    const rsi =
+        getRSI(
+            history,
+            CONFIG.RSI_PERIOD || 14
+        );
+
+    // =========================
+    // SAFETY FILTERS
+    // =========================
+
+    const isLowVol =
+        atr < CONFIG.ATR_MIN;
 
     const isDeadMarket =
-        Math.abs(deviation) < CONFIG.CHOP_ZONE;
+        Math.abs(deviation) <
+        CONFIG.CHOP_ZONE;
 
-    if (!position && isLowVol && isDeadMarket) {
+    if (
+        !position &&
+        isLowVol &&
+        isDeadMarket
+    ) {
         return {
             action: "HOLD",
             reason: "Low volatility chop",
             trend,
             deviation,
+            rsi,
             regime
         };
     }
 
-    // =========================
-    // SCALP MODE (NOW SCORING BASED)
-    // =========================
+    // ==================================================
+    // SCALP MODE
+    // ==================================================
 
     if (regime === "SCALP") {
 
         // =========================
-        // ENTRY SCORING SYSTEM (NEW)
+        // ENTRY LOGIC
         // =========================
 
         if (!position) {
 
             let score = 0;
 
-            // 1. Trend alignment
-            if (trend === "UPTREND") score += 1;
+            // =========================
+            // TREND ALIGNMENT
+            // =========================
 
-            // 2. Oversold / pullback
-            if (deviation <= CONFIG.SCALP_ENTRY) score += 1;
+            if (trend === "UPTREND") {
+                score += 1;
+            }
 
-            // 3. Volatility healthy
-            if (atrPercent >= 0.1 && atrPercent <= 1.5) score += 1;
+            // =========================
+            // PULLBACK / DEVIATION
+            // =========================
 
-            // 4. RSI confirmation (NEW FILTER)
-            const rsiOk = rsi < 35;
-            if (rsiOk) score += 1;
+            if (
+                deviation <=
+                CONFIG.SCALP_ENTRY
+            ) {
+                score += 1;
+            }
+
+            // =========================
+            // VOLATILITY FILTER
+            // =========================
+
+            if (
+                atrPercent >= 0.08 &&
+                atrPercent <= 1.8
+            ) {
+                score += 1;
+            }
+
+            // =========================
+            // RSI OVERSOLD
+            // =========================
+
+            if (
+                rsi <= CONFIG.RSI_OVERSOLD
+            ) {
+                score += 2;
+            }
+
+            // =========================
+            // RSI MOMENTUM REVERSAL
+            // VERY IMPORTANT
+            // =========================
+
+            const previousRSI =
+                getRSI(
+                    history.slice(0, -1),
+                    CONFIG.RSI_PERIOD || 14
+                );
+
+            const rsiReversal =
+                previousRSI <
+                CONFIG.RSI_OVERSOLD &&
+                rsi > previousRSI;
+
+            if (rsiReversal) {
+                score += 2;
+            }
+
+            // =========================
+            // STRONG MEAN REVERSION
+            // =========================
+
+            if (deviation <= -0.20) {
+                score += 1;
+            }
 
             // =========================
             // ENTRY THRESHOLD
             // =========================
 
-            if (score >= (CONFIG.SCALP_SCORE_THRESHOLD || 3)) {
+            if (
+                score >=
+                CONFIG.SCALP_SCORE_THRESHOLD
+            ) {
 
                 return {
                     action: "BUY",
-                    reason: "Scalp score entry",
+                    reason: "RSI scalp reversal entry",
+
                     score,
                     rsi,
+                    previousRSI,
+                    rsiReversal,
+
                     trend,
                     deviation,
                     regime,
@@ -98,8 +182,12 @@ function evaluateStrategy({
             return {
                 action: "HOLD",
                 reason: "Scalp score too low",
+
                 score,
                 rsi,
+                previousRSI,
+                rsiReversal,
+
                 trend,
                 deviation,
                 regime
@@ -111,24 +199,52 @@ function evaluateStrategy({
         // =========================
 
         const pnl =
-            ((price - position.entryPrice) / position.entryPrice) * 100;
+            (
+                (
+                    price -
+                    position.entryPrice
+                ) /
+                position.entryPrice
+            ) * 100;
 
-        const stopLoss = -(atrPercent * CONFIG.ATR_SCALP_SL);
-        const takeProfit = atrPercent * CONFIG.ATR_SCALP_TP;
+        // =========================
+        // IMPROVED RISK MODEL
+        // =========================
 
-        // BREAKEVEN
-        if (pnl > 0.5) {
+        const stopLoss =
+            -(
+                atrPercent *
+                CONFIG.ATR_SCALP_SL
+            );
+
+        const takeProfit =
+            atrPercent *
+            CONFIG.ATR_SCALP_TP;
+
+        // =========================
+        // TRAILING BREAKEVEN
+        // =========================
+
+        if (pnl >= 0.35) {
             position.stopLossMovedToBE = true;
         }
 
-        if (position.stopLossMovedToBE && pnl <= 0) {
+        // lock profit instead of full BE dump
+        if (
+            position.stopLossMovedToBE &&
+            pnl <= 0.10
+        ) {
             return {
                 action: "SELL",
-                reason: "Breakeven stop hit",
+                reason: "Trailing breakeven stop",
                 pnl,
                 regime
             };
         }
+
+        // =========================
+        // HARD STOP LOSS
+        // =========================
 
         if (pnl <= stopLoss) {
             return {
@@ -138,6 +254,26 @@ function evaluateStrategy({
                 regime
             };
         }
+
+        // =========================
+        // RSI OVERBOUGHT EXIT
+        // =========================
+
+        if (
+            pnl > 0.25 &&
+            rsi >= CONFIG.RSI_OVERBOUGHT
+        ) {
+            return {
+                action: "SELL",
+                reason: "RSI overbought take profit",
+                pnl,
+                regime
+            };
+        }
+
+        // =========================
+        // ATR TAKE PROFIT
+        // =========================
 
         if (pnl >= takeProfit) {
             return {
@@ -152,25 +288,53 @@ function evaluateStrategy({
             action: "HOLD",
             reason: "Managing scalp position",
             pnl,
+            rsi,
             regime
         };
     }
 
-    // =========================
-    // TREND MODE (UNCHANGED)
-    // =========================
+    // ==================================================
+    // TREND MODE
+    // ==================================================
 
     if (regime === "TREND") {
 
         const trendStrong =
-            Math.abs(deviation) > CONFIG.TREND_STRENGTH_MIN;
+            Math.abs(deviation) >
+            CONFIG.TREND_STRENGTH_MIN;
+
+        // =========================
+        // ENTRY
+        // =========================
 
         if (!position) {
 
-            if (trend === "UPTREND" && trendStrong) {
+            let trendScore = 0;
+
+            if (trend === "UPTREND") {
+                trendScore += 2;
+            }
+
+            if (trendStrong) {
+                trendScore += 1;
+            }
+
+            // healthy bullish momentum
+            if (rsi >= 50 && rsi <= 70) {
+                trendScore += 1;
+            }
+
+            if (
+                trendScore >=
+                CONFIG.TREND_SCORE_THRESHOLD
+            ) {
                 return {
                     action: "BUY",
-                    reason: "Trend entry",
+                    reason: "Trend momentum entry",
+
+                    trendScore,
+                    rsi,
+
                     trend,
                     deviation,
                     regime,
@@ -180,31 +344,63 @@ function evaluateStrategy({
 
             return {
                 action: "HOLD",
-                reason: "No trend setup",
+                reason: "Trend score too low",
+
+                trendScore,
+                rsi,
+
                 trend,
                 deviation,
                 regime
             };
         }
 
+        // =========================
+        // POSITION MANAGEMENT
+        // =========================
+
         const pnl =
-            ((price - position.entryPrice) / position.entryPrice) * 100;
+            (
+                (
+                    price -
+                    position.entryPrice
+                ) /
+                position.entryPrice
+            ) * 100;
 
-        const stopLoss = -(atrPercent * CONFIG.ATR_TREND_SL);
-        const takeProfit = atrPercent * CONFIG.ATR_TREND_TP;
+        const stopLoss =
+            -(
+                atrPercent *
+                CONFIG.ATR_TREND_SL
+            );
 
-        if (pnl > 1) {
+        const takeProfit =
+            atrPercent *
+            CONFIG.ATR_TREND_TP;
+
+        // =========================
+        // TREND TRAILING STOP
+        // =========================
+
+        if (pnl >= 1) {
             position.stopLossMovedToBE = true;
         }
 
-        if (position.stopLossMovedToBE && pnl <= 0) {
+        if (
+            position.stopLossMovedToBE &&
+            pnl <= 0.25
+        ) {
             return {
                 action: "SELL",
-                reason: "Trend breakeven stop",
+                reason: "Trend trailing stop",
                 pnl,
                 regime
             };
         }
+
+        // =========================
+        // STOP LOSS
+        // =========================
 
         if (pnl <= stopLoss) {
             return {
@@ -215,10 +411,30 @@ function evaluateStrategy({
             };
         }
 
+        // =========================
+        // RSI EXIT
+        // =========================
+
+        if (
+            pnl > 0.75 &&
+            rsi >= 75
+        ) {
+            return {
+                action: "SELL",
+                reason: "Trend RSI exhaustion",
+                pnl,
+                regime
+            };
+        }
+
+        // =========================
+        // TAKE PROFIT
+        // =========================
+
         if (pnl >= takeProfit) {
             return {
                 action: "SELL",
-                reason: "Trend take profit",
+                reason: "Trend ATR take profit",
                 pnl,
                 regime
             };
@@ -228,15 +444,21 @@ function evaluateStrategy({
             action: "HOLD",
             reason: "Holding trend position",
             pnl,
+            rsi,
             regime
         };
     }
+
+    // =========================
+    // DEFAULT
+    // =========================
 
     return {
         action: "HOLD",
         reason: "No setup",
         trend,
         deviation,
+        rsi,
         regime
     };
 }

@@ -44,8 +44,8 @@ module.exports = {
     SCALP_SCORE_THRESHOLD: 3,
 
     // ATR-based exits (scaled to BTC properly)
-    ATR_SCALP_TP: 1.8,
-    ATR_SCALP_SL: 1.2,
+    ATR_SCALP_TP: 2.4,
+    ATR_SCALP_SL: .9,
 
     SCALP_COOLDOWN: 15000,
 
