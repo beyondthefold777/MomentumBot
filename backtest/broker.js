@@ -32,10 +32,14 @@ function buy(price, size, meta = {}) {
 
     balance -= (size + fee);
 
+    // 🔥 FIX: normalize time to milliseconds
+    const entryTime =
+        meta.time ? meta.time * 1000 : Date.now();
+
     position = {
         entryPrice: fillPrice,
         size,
-        entryTime: meta.time || Date.now(),
+        entryTime,
 
         regime: meta.regime || "UNKNOWN",
         atr: meta.atr || 0,
@@ -47,10 +51,12 @@ function buy(price, size, meta = {}) {
         price: fillPrice,
         size,
         fee,
+
         regime: position.regime,
         atr: position.atr,
         score: position.score,
-        entryTime: position.entryTime
+
+        entryTime
     });
 }
 
@@ -81,7 +87,7 @@ function sell(price, meta = {}) {
         type: "SELL",
         price: fillPrice,
 
-        // 🔥 CRITICAL FIX: unified field
+        // unified numeric fields
         pnlUsd: pnl,
         pnlPct: priceChange * 100,
 

@@ -3,12 +3,13 @@ const CONFIG = require("../config");
 const {
     movingAverage,
     getDeviation,
-    getTrendDirection
+    getTrendDirection,
+    getRSI
 } = require("../utils/indicators");
 
 // =========================
-// STRATEGY ENGINE v4
-// NO SCORING - PURE STRUCTURE
+// STRATEGY ENGINE v5
+// SCORING + FILTERED SCALPING
 // =========================
 
 function evaluateStrategy({
@@ -20,22 +21,21 @@ function evaluateStrategy({
 }) {
 
     const movingAvg = movingAverage(history);
-
     const deviation = getDeviation(price, movingAvg);
-
-    const trend = getTrendDirection(
-        history,
-        CONFIG.TREND_WINDOW
-    );
+    const trend = getTrendDirection(history, CONFIG.TREND_WINDOW);
 
     const atrPercent = (atr / price) * 100;
 
     // =========================
-    // BASIC SAFETY FILTERS ONLY
+    // RSI (NEW)
+    // =========================
+    const rsi = getRSI(history, CONFIG.RSI_PERIOD || 14);
+
+    // =========================
+    // BASIC SAFETY FILTERS
     // =========================
 
-    const isLowVol =
-        atr < CONFIG.ATR_MIN;
+    const isLowVol = atr < CONFIG.ATR_MIN;
 
     const isDeadMarket =
         Math.abs(deviation) < CONFIG.CHOP_ZONE;
@@ -51,24 +51,43 @@ function evaluateStrategy({
     }
 
     // =========================
-    // SCALP MODE
+    // SCALP MODE (NOW SCORING BASED)
     // =========================
 
     if (regime === "SCALP") {
 
         // =========================
-        // ENTRY RULE (simple)
+        // ENTRY SCORING SYSTEM (NEW)
         // =========================
 
         if (!position) {
 
-            if (
-                deviation <= CONFIG.SCALP_ENTRY
-                || deviation <= -0.03
-            ) {
+            let score = 0;
+
+            // 1. Trend alignment
+            if (trend === "UPTREND") score += 1;
+
+            // 2. Oversold / pullback
+            if (deviation <= CONFIG.SCALP_ENTRY) score += 1;
+
+            // 3. Volatility healthy
+            if (atrPercent >= 0.1 && atrPercent <= 1.5) score += 1;
+
+            // 4. RSI confirmation (NEW FILTER)
+            const rsiOk = rsi < 35;
+            if (rsiOk) score += 1;
+
+            // =========================
+            // ENTRY THRESHOLD
+            // =========================
+
+            if (score >= (CONFIG.SCALP_SCORE_THRESHOLD || 3)) {
+
                 return {
                     action: "BUY",
-                    reason: "Scalp dip entry",
+                    reason: "Scalp score entry",
+                    score,
+                    rsi,
                     trend,
                     deviation,
                     regime,
@@ -78,7 +97,9 @@ function evaluateStrategy({
 
             return {
                 action: "HOLD",
-                reason: "No scalp setup",
+                reason: "Scalp score too low",
+                score,
+                rsi,
                 trend,
                 deviation,
                 regime
@@ -92,14 +113,10 @@ function evaluateStrategy({
         const pnl =
             ((price - position.entryPrice) / position.entryPrice) * 100;
 
-        // =========================
-        // FIXED EXIT SYSTEM
-        // =========================
-
         const stopLoss = -(atrPercent * CONFIG.ATR_SCALP_SL);
         const takeProfit = atrPercent * CONFIG.ATR_SCALP_TP;
 
-        // 🚨 BREAKEVEN LOGIC
+        // BREAKEVEN
         if (pnl > 0.5) {
             position.stopLossMovedToBE = true;
         }
@@ -113,7 +130,6 @@ function evaluateStrategy({
             };
         }
 
-        // STOP LOSS
         if (pnl <= stopLoss) {
             return {
                 action: "SELL",
@@ -123,7 +139,6 @@ function evaluateStrategy({
             };
         }
 
-        // TAKE PROFIT
         if (pnl >= takeProfit) {
             return {
                 action: "SELL",
@@ -142,7 +157,7 @@ function evaluateStrategy({
     }
 
     // =========================
-    // TREND MODE
+    // TREND MODE (UNCHANGED)
     // =========================
 
     if (regime === "TREND") {
@@ -150,16 +165,9 @@ function evaluateStrategy({
         const trendStrong =
             Math.abs(deviation) > CONFIG.TREND_STRENGTH_MIN;
 
-        // =========================
-        // ENTRY RULE
-        // =========================
-
         if (!position) {
 
-            if (
-                trend === "UPTREND" &&
-                trendStrong
-            ) {
+            if (trend === "UPTREND" && trendStrong) {
                 return {
                     action: "BUY",
                     reason: "Trend entry",
@@ -179,17 +187,12 @@ function evaluateStrategy({
             };
         }
 
-        // =========================
-        // POSITION MANAGEMENT
-        // =========================
-
         const pnl =
             ((price - position.entryPrice) / position.entryPrice) * 100;
 
         const stopLoss = -(atrPercent * CONFIG.ATR_TREND_SL);
         const takeProfit = atrPercent * CONFIG.ATR_TREND_TP;
 
-        // 🚨 BREAKEVEN LOGIC
         if (pnl > 1) {
             position.stopLossMovedToBE = true;
         }
@@ -228,10 +231,6 @@ function evaluateStrategy({
             regime
         };
     }
-
-    // =========================
-    // DEFAULT
-    // =========================
 
     return {
         action: "HOLD",

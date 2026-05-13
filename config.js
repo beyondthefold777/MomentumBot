@@ -6,13 +6,8 @@ module.exports = {
 
     SYMBOL: "BTC-USD",
 
-    // Faster loop for scalp reactions
     INTERVAL: 3000,
-
-    // Candle/price memory
     WINDOW: 50,
-
-    // Trend detection lookback
     TREND_WINDOW: 25,
 
     // =========================
@@ -22,7 +17,7 @@ module.exports = {
     TRADE_SIZE_USD: 250,
 
     // =========================
-    // LEGACY FALLBACK SETTINGS
+    // LEGACY THRESHOLDS (optional fallback system)
     // =========================
 
     BUY_THRESHOLD: -1.5,
@@ -30,82 +25,59 @@ module.exports = {
     STOP_LOSS_PERCENT: 2,
 
     // =========================
-    // ATR VOLATILITY ENGINE
+    // INDICATORS
     // =========================
 
-    // Lowered so bot trades more often
-    ATR_MIN: 0.15,
+    RSI_PERIOD: 14,
 
-    // Smaller chop filter
-    CHOP_ZONE: 0.02,
+    // ATR is now in PRICE UNITS (NOT percent)
+    ATR_MIN: 20,
+
+    CHOP_ZONE: 0.03,
 
     // =========================
     // SCALP MODE
     // =========================
 
-    // Easier entry trigger
-    SCALP_ENTRY: -0.02,
+    SCALP_ENTRY: -0.25,
 
-    // =========================
-    // ATR-BASED EXITS
-    // =========================
+    SCALP_SCORE_THRESHOLD: 3,
 
-    // Hold winners longer
-    ATR_SCALP_TP: 2.0,
+    // ATR-based exits (scaled to BTC properly)
+    ATR_SCALP_TP: 1.8,
+    ATR_SCALP_SL: 1.2,
 
-    // Cut losers faster
-    ATR_SCALP_SL: 0.35,
-
-    // Cooldown after scalp trades
     SCALP_COOLDOWN: 15000,
 
     // =========================
     // TREND MODE
     // =========================
 
-    ATR_TREND_TP: 2.5,
+    TREND_STRENGTH_MIN: 0.5,
 
-    ATR_TREND_SL: 1.2,
+    SCALP_SCORE_WEIGHT: 1,
+    TREND_SCORE_WEIGHT: 1,
 
-    // Ignore weak trends
-    TREND_STRENGTH_MIN: 0.4,
+    ATR_TREND_TP: 3.0,
+    ATR_TREND_SL: 1.5,
 
     TREND_COOLDOWN: 60000,
 
     // =========================
-    // TRADE QUALITY FILTERS
+    // RISK CONTROLS
     // =========================
 
-    // Lowered so system is less hesitant
-    MIN_SCALP_SCORE: 40,
-
-    MIN_TREND_SCORE: 50,
-
-    // =========================
-    // POSITION SIZING
-    // =========================
-
-    // Future ATR position sizing
     USE_DYNAMIC_POSITION_SIZING: false,
 
-    // Future risk engine
     RISK_PER_TRADE: 0.01,
 
-    // =========================
-    // BACKTEST SETTINGS
-    // =========================
-
-    // Simulated spread/slippage
-    SLIPPAGE: 0.0005,
-
-    // Exchange fee simulation
-    FEE_RATE: 0.001,
-
-    // =========================
-    // GLOBAL RISK CONTROLS
-    // =========================
-
     MAX_DAILY_DRAWDOWN: 0.05,
+    MAX_OPEN_TRADES: 1,
 
-    MAX_OPEN_TRADES: 1
+    // =========================
+    // EXECUTION
+    // =========================
+
+    SLIPPAGE: 0.0005,
+    FEE_RATE: 0.001
 };
