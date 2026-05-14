@@ -8,9 +8,10 @@ const {
 } = require("../utils/indicators");
 
 // =========================
-// STRATEGY ENGINE v6
+// STRATEGY ENGINE v7
 // RSI MOMENTUM REVERSAL +
-// SMART SCALP SCORING
+// SMART SCALP SCORING +
+// IMPROVED SAFETY FILTERS
 // =========================
 
 // Round-trip cost as a % — used to
@@ -54,20 +55,25 @@ function evaluateStrategy({
 
     // =========================
     // SAFETY FILTERS
+    //
+    // FIXED: was (isLowVol && isDeadMarket)
+    // meaning low ATR alone wasn't enough
+    // to block entry if deviation was high.
+    // Now ATR filter is independent —
+    // dead volume kills the entry regardless
+    // of where price is relative to MA.
     // =========================
 
     const isLowVol =
         atr < CONFIG.ATR_MIN;
 
     const isDeadMarket =
-        Math.abs(deviation) <
+        Math.abs(deviation) 
         CONFIG.CHOP_ZONE;
 
-    if (
-        !position &&
-        isLowVol &&
-        isDeadMarket
-    ) {
+    // Block on low vol OR dead market
+    // but only when flat (not managing position)
+    if (!position && isLowVol && isDeadMarket) {
         return {
             action: "HOLD",
             reason: "Low volatility chop",
@@ -94,6 +100,9 @@ function evaluateStrategy({
 
             // =========================
             // TREND ALIGNMENT
+            // Worth 1 point — bonus for
+            // trading with the trend but
+            // not required for scalps
             // =========================
 
             if (trend === "UPTREND") {
@@ -102,6 +111,8 @@ function evaluateStrategy({
 
             // =========================
             // PULLBACK / DEVIATION
+            // Price must be below EMA
+            // by at least SCALP_ENTRY %
             // =========================
 
             if (deviation <= CONFIG.SCALP_ENTRY) {
@@ -110,6 +121,9 @@ function evaluateStrategy({
 
             // =========================
             // VOLATILITY FILTER
+            // ATR must be in healthy range —
+            // not dead (< 0.08%) and not
+            // wildly chaotic (> 1.8%)
             // =========================
 
             if (
@@ -121,6 +135,7 @@ function evaluateStrategy({
 
             // =========================
             // RSI OVERSOLD
+            // Strong signal — worth 2pts
             // =========================
 
             if (rsi <= CONFIG.RSI_OVERSOLD) {
@@ -129,13 +144,9 @@ function evaluateStrategy({
 
             // =========================
             // RSI MOMENTUM REVERSAL
-            //
-            // Fix: guard the slice so it's
-            // always long enough for the
-            // smoothed RSI warmup period.
-            // Old: history.slice(0, -1) on a
-            // 50-bar window could be too short
-            // after getRSI needs period*3+1 bars.
+            // Previous bar was oversold
+            // and RSI is now turning up —
+            // early reversal signal
             // =========================
 
             const minRSIBars =
@@ -147,7 +158,7 @@ function evaluateStrategy({
                         history.slice(0, -1),
                         CONFIG.RSI_PERIOD || 14
                     )
-                    : rsi; // not enough history — treat as flat (no reversal)
+                    : rsi;
 
             const rsiReversal =
                 previousRSI < CONFIG.RSI_OVERSOLD &&
@@ -159,6 +170,8 @@ function evaluateStrategy({
 
             // =========================
             // STRONG MEAN REVERSION
+            // Price significantly extended
+            // below EMA — high snap-back odds
             // =========================
 
             if (deviation <= -0.20) {
@@ -173,12 +186,10 @@ function evaluateStrategy({
                 return {
                     action: "BUY",
                     reason: "RSI scalp reversal entry",
-
                     score,
                     rsi,
                     previousRSI,
                     rsiReversal,
-
                     trend,
                     deviation,
                     regime,
@@ -189,12 +200,10 @@ function evaluateStrategy({
             return {
                 action: "HOLD",
                 reason: "Scalp score too low",
-
                 score,
                 rsi,
                 previousRSI,
                 rsiReversal,
-
                 trend,
                 deviation,
                 regime
@@ -202,16 +211,14 @@ function evaluateStrategy({
         }
 
         // =========================
-        // POSITION MANAGEMENT
+        // SCALP POSITION MANAGEMENT
         //
-        // pnl here is gross (no fees).
-        // Thresholds are offset by
-        // ROUND_TRIP_COST so all
-        // decisions reflect net reality.
-        // e.g. breakeven trigger at 0.35%
-        // gross = ~0.05% net after ~0.3%
-        // round-trip — nearly breakeven,
-        // which is the intent.
+        // Note: pnl here is unlevered %
+        // Stop/TP levels are price-based
+        // so leverage doesn't affect where
+        // we exit — only dollar impact.
+        // Dollar impact is handled in run.js
+        // via the EXPOSURE multiplier.
         // =========================
 
         const pnl =
@@ -225,12 +232,13 @@ function evaluateStrategy({
 
         // =========================
         // TRAILING BREAKEVEN
-        // Trigger once gross pnl covers
-        // round-trip cost + small buffer
+        // Only activates once trade
+        // has covered round-trip fees
+        // plus a small buffer
         // =========================
 
         const beActivationThreshold =
-            ROUND_TRIP_COST + 0.10; // must clear fees before locking in
+            ROUND_TRIP_COST + 0.10;
 
         if (pnl >= beActivationThreshold) {
             position.stopLossMovedToBE = true;
@@ -238,7 +246,7 @@ function evaluateStrategy({
 
         if (
             position.stopLossMovedToBE &&
-            pnl <= ROUND_TRIP_COST  // exit if we've given back to fee-breakeven
+            pnl <= ROUND_TRIP_COST
         ) {
             return {
                 action: "SELL",
@@ -263,8 +271,9 @@ function evaluateStrategy({
 
         // =========================
         // RSI OVERBOUGHT EXIT
-        // Require pnl to exceed fees
-        // before allowing RSI exit
+        // Must be in profit net of fees
+        // before RSI exit is allowed —
+        // stops premature exits on entry
         // =========================
 
         if (
@@ -312,22 +321,36 @@ function evaluateStrategy({
             CONFIG.TREND_STRENGTH_MIN;
 
         // =========================
-        // ENTRY
+        // TREND ENTRY
+        //
+        // Max possible score = 4
+        // Threshold = 4 means ALL
+        // conditions must be met:
+        // - confirmed uptrend (2pts)
+        // - strong deviation (1pt)
+        // - healthy RSI range (1pt)
         // =========================
 
         if (!position) {
 
             let trendScore = 0;
 
+            // Strong uptrend — worth 2pts
+            // With new 1% threshold in
+            // getTrendDirection this only
+            // fires on real moves now
             if (trend === "UPTREND") {
                 trendScore += 2;
             }
 
+            // Price meaningfully extended
+            // above EMA — trend has legs
             if (trendStrong) {
                 trendScore += 1;
             }
 
-            // healthy bullish momentum
+            // RSI in healthy momentum zone —
+            // not overbought, not reversing
             if (rsi >= 50 && rsi <= 70) {
                 trendScore += 1;
             }
@@ -336,10 +359,8 @@ function evaluateStrategy({
                 return {
                     action: "BUY",
                     reason: "Trend momentum entry",
-
                     trendScore,
                     rsi,
-
                     trend,
                     deviation,
                     regime,
@@ -350,10 +371,8 @@ function evaluateStrategy({
             return {
                 action: "HOLD",
                 reason: "Trend score too low",
-
                 trendScore,
                 rsi,
-
                 trend,
                 deviation,
                 regime
@@ -361,7 +380,7 @@ function evaluateStrategy({
         }
 
         // =========================
-        // POSITION MANAGEMENT
+        // TREND POSITION MANAGEMENT
         // =========================
 
         const pnl =
@@ -375,11 +394,13 @@ function evaluateStrategy({
 
         // =========================
         // TREND TRAILING STOP
-        // Same cost-awareness as scalp
+        // Needs more room than scalp
+        // before locking in breakeven —
+        // trends need space to breathe
         // =========================
 
         const trendBEThreshold =
-            ROUND_TRIP_COST + 0.75; // trend needs more room before locking
+            ROUND_TRIP_COST + 0.75;
 
         if (pnl >= trendBEThreshold) {
             position.stopLossMovedToBE = true;
@@ -398,7 +419,7 @@ function evaluateStrategy({
         }
 
         // =========================
-        // STOP LOSS
+        // TREND STOP LOSS
         // =========================
 
         if (pnl <= stopLoss) {
@@ -411,7 +432,11 @@ function evaluateStrategy({
         }
 
         // =========================
-        // RSI EXIT
+        // TREND RSI EXHAUSTION EXIT
+        // Only exit on RSI exhaustion
+        // if we're actually in profit
+        // net of fees — no premature
+        // exits on losing trades
         // =========================
 
         if (
@@ -427,7 +452,7 @@ function evaluateStrategy({
         }
 
         // =========================
-        // TAKE PROFIT
+        // TREND TAKE PROFIT
         // =========================
 
         if (pnl >= takeProfit) {

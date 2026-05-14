@@ -18,10 +18,12 @@ module.exports = {
     VERBOSE:           true,
 
     // =========================
-    // TRADE SIZE
+    // TRADE SIZE + LEVERAGE
     // =========================
 
-    TRADE_SIZE_USD: 5000,       // RAISED from 250 — full position sizing
+    TRADE_SIZE_USD: 1000,       // margin per trade
+    LEVERAGE:       5,          // 5x — effective exposure $5,000 per trade
+    LIQUIDATION_THRESHOLD: 0.80, // Kraken liquidates at ~80% margin loss
 
     // =========================
     // INDICATORS
@@ -31,39 +33,34 @@ module.exports = {
     RSI_OVERSOLD:   35,
     RSI_OVERBOUGHT: 65,
 
-    ATR_MIN:   150,             // filters dead low-vol hours
-    CHOP_ZONE: 0.03,            // % deviation below which market is dead
+    ATR_MIN:   200,             // RAISED from 150 — filters dead low-vol hours
+   CHOP_ZONE: 0.15,
 
     // =========================
     // SCALP MODE
     // =========================
 
-    SCALP_ENTRY:           -0.20, // LOOSENED from -0.35 — more entry opportunities
-    SCALP_SCORE_THRESHOLD:  3,    // LOWERED from 4 — more scalp signals
-    SCALP_TIME_STOP:        4,    // LOWERED from 8 — max 4h, avoids rollover fees
+    SCALP_ENTRY:           -0.20, // loosened from -0.35 — more entries
+    SCALP_SCORE_THRESHOLD:  3,    // lowered from 4 — more scalp signals
+    SCALP_TIME_STOP:        4,    // max 4 candles — stays under rollover window
     SCALP_COOLDOWN:         15000,
 
-    // At $300 ATR on $100k BTC: atrPct = 0.3%
-    // TP = 0.3 * 5 = 1.5% gross = $75 on $5k trade
-    // SL = 0.3 * 2 = 0.6% gross = $30 on $5k trade — R:R = 2.5:1
-    ATR_SCALP_TP: 5.0,
-    ATR_SCALP_SL: 2.0,
+    ATR_SCALP_TP: 8.0,
+    ATR_SCALP_SL: 1.5,          // TIGHTENED from 2.0 — cut losers faster
 
     // =========================
     // TREND MODE
     // =========================
 
     TREND_STRENGTH_MIN:    0.5,
-    TREND_SCORE_THRESHOLD: 4,    // RAISED from 3 — only high conviction trends
+    TREND_SCORE_THRESHOLD: 4,    // raised — only high conviction entries
     TREND_COOLDOWN:        60000,
 
     SCALP_SCORE_WEIGHT: 1,
     TREND_SCORE_WEIGHT: 1,
 
-    // TP = 0.3 * 6 = 1.8% = $90 on $5k — only take strong trend setups
-    // SL = 0.3 * 3 = 0.9% = $45 on $5k — R:R = 2:1
     ATR_TREND_TP: 6.0,
-    ATR_TREND_SL: 3.0,          // RAISED from 2.0 — stops noise wicking you out
+    ATR_TREND_SL: 3.0,          // raised from 2.0 — room to breathe
 
     // =========================
     // RISK CONTROLS
@@ -78,8 +75,8 @@ module.exports = {
     // EXECUTION COSTS
     // =========================
 
-    SLIPPAGE: 0.0005,           // 0.05% per side
-    FEE_RATE: 0.001,            // 0.1% per side (Kraken taker fee)
+    SLIPPAGE: 0.0005,
+    FEE_RATE: 0.001,
 
     // =========================
     // LEGACY THRESHOLDS

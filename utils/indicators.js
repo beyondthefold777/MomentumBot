@@ -1,16 +1,20 @@
 // =========================
-// MOVING AVERAGE
+// MOVING AVERAGE (EMA)
+//
+// Switched from SMA to EMA —
+// weights recent candles heavier
+// so deviation signals reflect
+// current price action, not
+// 50-bar-old history equally.
 // =========================
 
-function movingAverage(data) {
+function movingAverage(data, alpha = 0.1) {
     if (!data.length) return 0;
-
-    const sum = data.reduce(
-        (acc, value) => acc + value,
-        0
-    );
-
-    return sum / data.length;
+    let ema = data[0];
+    for (let i = 1; i < data.length; i++) {
+        ema = alpha * data[i] + (1 - alpha) * ema;
+    }
+    return ema;
 }
 
 // =========================
@@ -19,12 +23,18 @@ function movingAverage(data) {
 
 function getDeviation(price, average) {
     if (!average) return 0;
-
     return ((price - average) / average) * 100;
 }
 
 // =========================
 // TREND DIRECTION
+//
+// Raised threshold from 0.4%
+// to 1.0% — on BTC a 0.4% move
+// over 24h is noise, not a trend.
+// This stops UPTREND firing
+// constantly and inflating
+// trend score on every candle.
 // =========================
 
 function getTrendDirection(data, trendWindow) {
@@ -33,15 +43,13 @@ function getTrendDirection(data, trendWindow) {
     }
 
     const recent = data.slice(-trendWindow);
+    const start  = recent[0];
+    const end    = recent[recent.length - 1];
 
-    const start = recent[0];
-    const end   = recent[recent.length - 1];
+    const percentChange = ((end - start) / start) * 100;
 
-    const percentChange =
-        ((end - start) / start) * 100;
-
-    if (percentChange >  0.4) return "UPTREND";
-    if (percentChange < -0.4) return "DOWNTREND";
+    if (percentChange >  1.0) return "UPTREND";
+    if (percentChange < -1.0) return "DOWNTREND";
 
     return "SIDEWAYS";
 }
@@ -49,20 +57,18 @@ function getTrendDirection(data, trendWindow) {
 // =========================
 // ATR (AVERAGE TRUE RANGE)
 //
-// Fix: only look at the last
-// (period + 1) candles instead
-// of iterating the full history.
-// On a 5000-bar window the old
-// version did ~5000 iterations
-// every tick for no reason.
+// Uses only close prices since
+// that's all the backtest passes
+// in. High/low would be more
+// accurate but requires candle
+// objects — flagged for future
+// improvement.
 // =========================
 
 function getATR(data, period = 14) {
     if (data.length < period + 1) return 0;
 
-    // Only need the last (period + 1) prices to get (period) TR values
     const slice = data.slice(-(period + 1));
-
     let sum = 0;
 
     for (let i = 1; i < slice.length; i++) {
@@ -75,30 +81,18 @@ function getATR(data, period = 14) {
 // =========================
 // RSI (RELATIVE STRENGTH INDEX)
 //
-// Uses Wilder's smoothed method:
-//   1. Seed with simple average
-//      over first `period` bars
-//   2. Apply exponential smoothing
-//      for remaining bars
-//
-// This matches how TradingView
-// and most exchanges calculate RSI.
-// The old version restarted a
-// simple average every call, giving
-// noisier values that don't align
-// with charting platforms.
+// Wilder's smoothed method —
+// matches TradingView output.
 // =========================
 
 function getRSI(data, period = 14) {
     if (data.length < period + 1) return 50;
 
-    // Need at least period + 1 values to compute period changes
-    const prices = data.slice(-(period * 3 + 1));  // grab extra history for smoothing warmup
+    const prices = data.slice(-(period * 3 + 1));
 
     let avgGain = 0;
     let avgLoss = 0;
 
-    // Seed: simple average of first `period` changes
     for (let i = 1; i <= period; i++) {
         const change = prices[i] - prices[i - 1];
         if (change > 0) avgGain += change;
@@ -108,7 +102,6 @@ function getRSI(data, period = 14) {
     avgGain /= period;
     avgLoss /= period;
 
-    // Smooth: Wilder's exponential smoothing for remaining bars
     for (let i = period + 1; i < prices.length; i++) {
         const change = prices[i] - prices[i - 1];
         const gain   = change > 0 ? change : 0;

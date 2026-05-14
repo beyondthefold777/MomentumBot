@@ -9,13 +9,18 @@ const { getATR }               = require("../utils/indicators");
 // CONSTANTS
 // =========================
 
-const FEE_RATE   = CONFIG.FEE_RATE       || 0.001;
-const SLIPPAGE   = CONFIG.SLIPPAGE       || 0.0005;
-const TRADE_SIZE = CONFIG.TRADE_SIZE_USD || 250;
+const FEE_RATE    = CONFIG.FEE_RATE          || 0.001;
+const SLIPPAGE    = CONFIG.SLIPPAGE          || 0.0005;
+const TRADE_SIZE  = CONFIG.TRADE_SIZE_USD    || 1000;
+const LEVERAGE    = CONFIG.LEVERAGE          || 1;
+const LIQ_THRESH  = CONFIG.LIQUIDATION_THRESHOLD || 0.80;
 
-// SCALP_TIME_STOP is in candles (hours on 1h chart)
-// e.g. 8 = close after 8 candles = 8 hours on 1h data
-const TIME_STOP_CANDLES = CONFIG.SCALP_TIME_STOP || 8;
+// Effective exposure per trade
+const EXPOSURE = TRADE_SIZE * LEVERAGE;
+
+const TIME_STOP_CANDLES = CONFIG.SCALP_TIME_STOP || 4;
+
+const STARTING_BALANCE = 10000;
 
 // =========================
 // BACKTEST RUNNER
@@ -28,9 +33,9 @@ async function runBacktest() {
     // -------------------------------------------------------
 
     const candles = await fetchHistoricalOHLCV({
-        pair:         "XBTUSD",
-        interval:     CONFIG.BACKTEST_INTERVAL || 60,
-        targetCandles: CONFIG.BACKTEST_CANDLES || 720
+        pair:          "XBTUSD",
+        interval:      CONFIG.BACKTEST_INTERVAL || 60,
+        targetCandles: CONFIG.BACKTEST_CANDLES  || 720
     });
 
     if (candles.length < CONFIG.WINDOW + 50) {
@@ -40,19 +45,24 @@ async function runBacktest() {
 
     const priceHistory = candles.map(c => c.close);
 
-    console.log(`📈 Running backtest on ${priceHistory.length} candles...\n`);
+    console.log(`📈 Running backtest on ${priceHistory.length} candles...`);
+    console.log(`   Margin/trade: $${TRADE_SIZE} | Leverage: ${LEVERAGE}x | Exposure: $${EXPOSURE}\n`);
 
     // -------------------------------------------------------
     // 2. STATE
     // -------------------------------------------------------
 
-    let balance     = 1000;
-    let position    = null;
-    let trades      = [];
-    let peakBalance = balance;
-    let maxDrawdown = 0;
-    let scalpTrades = 0;
-    let trendTrades = 0;
+    let balance        = STARTING_BALANCE;
+    let position       = null;
+    let trades         = [];
+    let peakBalance    = balance;
+    let maxDrawdown    = 0;
+    let scalpTrades    = 0;
+    let trendTrades    = 0;
+    let liquidations   = 0;
+
+    // cooldown tracking
+    let trendCooldownUntil = 0;
 
     // -------------------------------------------------------
     // 3. LOOP
@@ -68,22 +78,50 @@ async function runBacktest() {
         const atr    = getATR(window);
 
         // -------------------------------------------------------
-        // TIME STOP — measured in candles, not minutes
-        // Fires BEFORE evaluating new signal so we don't
-        // re-enter on the same candle we just closed
+        // LIQUIDATION CHECK
+        // Fires before anything else —
+        // if unrealized loss >= 80% of margin, force liquidate
+        // -------------------------------------------------------
+
+        if (position) {
+            const unrealizedPct = ((price - position.entryPrice) / position.entryPrice) * 100 * LEVERAGE;
+            const unrealizedUsd = (unrealizedPct / 100) * TRADE_SIZE;
+
+            if (unrealizedUsd <= -(TRADE_SIZE * LIQ_THRESH)) {
+                const result = closeTrade(position, price, time, "LIQUIDATED");
+                balance += Math.max(0, result.pnlUsd);
+                trades.push(result);
+                liquidations++;
+
+                if (CONFIG.VERBOSE) {
+                    console.log(
+                        `💀 LIQUIDATED [${position.regime}] @ $${price.toFixed(0)}` +
+                        ` | Loss: -$${Math.abs(result.pnlUsd).toFixed(2)}` +
+                        ` | ${new Date(time * 1000).toISOString().slice(0, 16)}`
+                    );
+                }
+
+                position = null;
+                trendCooldownUntil = i + 12;
+                continue;
+            }
+        }
+
+        // -------------------------------------------------------
+        // TIME STOP — scalp positions only
         // -------------------------------------------------------
 
         if (position && position.regime === "SCALP") {
             const ageCandles = i - position.entryIndex;
             if (ageCandles >= TIME_STOP_CANDLES) {
                 const result = closeTrade(position, price, time, "Time stop");
-                balance += TRADE_SIZE + result.pnlUsd;
+                balance += result.pnlUsd;
                 trades.push(result);
 
                 if (CONFIG.VERBOSE) logSell(position, result);
 
                 position = null;
-                continue; // skip entry logic this candle
+                continue;
             }
         }
 
@@ -100,24 +138,34 @@ async function runBacktest() {
         });
 
         // -------------------------------------------------------
-        // BUY — only if flat
+        // BUY — only if flat and cooldown has passed
         // -------------------------------------------------------
 
         if (signal.action === "BUY" && !position) {
 
+            if (regime === "TREND" && i < trendCooldownUntil) {
+                continue;
+            }
+
+            if (balance < TRADE_SIZE) {
+                console.log(`⚠️  Insufficient balance ($${balance.toFixed(2)}) for margin ($${TRADE_SIZE}). Skipping.`);
+                continue;
+            }
+
             const fillPrice = price * (1 + SLIPPAGE);
-            const fee       = TRADE_SIZE * FEE_RATE;
+            const fee       = EXPOSURE * FEE_RATE;
+
+            balance -= fee;
 
             position = {
                 entryPrice:  fillPrice,
-                size:        TRADE_SIZE,
+                size:        EXPOSURE,
+                margin:      TRADE_SIZE,
                 entryTime:   time,
-                entryIndex:  i,       // track candle index for time stop
-                regime:      regime,
-                fee:         fee
+                entryIndex:  i,
+                regime,
+                fee
             };
-
-            balance -= fee;
 
             if (regime === "SCALP") scalpTrades++;
             if (regime === "TREND") trendTrades++;
@@ -127,6 +175,7 @@ async function runBacktest() {
                     `🟢 BUY  [${regime}] @ $${price.toFixed(0)}` +
                     ` | ATR: ${atr.toFixed(0)}` +
                     ` | Score: ${signal.score || signal.trendScore || '-'}` +
+                    ` | Exposure: $${EXPOSURE}` +
                     ` | ${new Date(time * 1000).toISOString().slice(0, 16)}`
                 );
             }
@@ -138,8 +187,15 @@ async function runBacktest() {
 
         if (signal.action === "SELL" && position) {
 
+            if (
+                position.regime === "TREND" &&
+                (signal.reason === "Trend stop loss" || signal.reason === "ATR stop loss")
+            ) {
+                trendCooldownUntil = i + 6;
+            }
+
             const result = closeTrade(position, price, time, signal.reason);
-            balance += TRADE_SIZE + result.pnlUsd;
+            balance += result.pnlUsd;
             trades.push(result);
 
             if (CONFIG.VERBOSE) logSell(position, result);
@@ -164,7 +220,7 @@ async function runBacktest() {
         const lastPrice = priceHistory.at(-1);
         const lastTime  = candles.at(-1).time;
         const result    = closeTrade(position, lastPrice, lastTime, "End of data");
-        balance += TRADE_SIZE + result.pnlUsd;
+        balance += result.pnlUsd;
         trades.push(result);
         if (CONFIG.VERBOSE) logSell(position, result);
         console.log(`⚠️  Force-closed open position at end of data.`);
@@ -174,7 +230,16 @@ async function runBacktest() {
     // 5. RESULTS
     // -------------------------------------------------------
 
-    printResults({ trades, balance, maxDrawdown, scalpTrades, trendTrades, candles, priceHistory });
+    printResults({
+        trades,
+        balance,
+        maxDrawdown,
+        scalpTrades,
+        trendTrades,
+        liquidations,
+        candles,
+        priceHistory
+    });
 }
 
 // =========================
@@ -183,16 +248,23 @@ async function runBacktest() {
 
 function closeTrade(position, price, time, reason = "") {
     const fillPrice = price * (1 - SLIPPAGE);
+
     const pnlRaw    = ((fillPrice - position.entryPrice) / position.entryPrice) * position.size;
     const fee       = position.size * FEE_RATE;
     const pnlUsd    = pnlRaw - fee;
-    const pnlPct    = ((fillPrice - position.entryPrice) / position.entryPrice) * 100;
+
+    // cap loss at full margin
+    const cappedPnl = Math.max(pnlUsd, -position.margin);
+
+    // pnl % shown as % of margin so leverage impact is visible
+    const pnlPct    = (cappedPnl / position.margin) * 100;
+
     const duration  = (time - position.entryTime) / 60;
 
     return {
         entryPrice:      position.entryPrice,
         exitPrice:       fillPrice,
-        pnlUsd,
+        pnlUsd:          cappedPnl,
         pnlPct,
         durationMinutes: duration,
         regime:          position.regime,
@@ -219,8 +291,16 @@ function logSell(position, result) {
 // PRINT RESULTS
 // =========================
 
-function printResults({ trades, balance, maxDrawdown, scalpTrades, trendTrades, candles, priceHistory }) {
-
+function printResults({
+    trades,
+    balance,
+    maxDrawdown,
+    scalpTrades,
+    trendTrades,
+    liquidations,
+    candles,
+    priceHistory
+}) {
     const wins      = trades.filter(t => t.pnlUsd > 0);
     const losses    = trades.filter(t => t.pnlUsd <= 0);
     const totalPnL  = trades.reduce((a, t) => a + t.pnlUsd, 0);
@@ -250,14 +330,20 @@ function printResults({ trades, balance, maxDrawdown, scalpTrades, trendTrades, 
     console.log("📊 BACKTEST RESULTS");
     console.log(`Period:            ${fromDate} → ${toDate}`);
     console.log(`Candles:           ${priceHistory.length}`);
+    console.log(`Leverage:          ${LEVERAGE}x`);
+    console.log(`Margin/Trade:      $${TRADE_SIZE}`);
+    console.log(`Exposure/Trade:    $${EXPOSURE}`);
     console.log("=========================");
     console.log(`Trades:            ${trades.length}`);
     console.log(`Wins:              ${wins.length}`);
     console.log(`Losses:            ${losses.length}`);
     console.log(`Win Rate:          ${winRate.toFixed(2)}%`);
+    console.log(`Liquidations:      ${liquidations}`);
     console.log("---------");
     console.log(`Total PnL:         $${totalPnL.toFixed(2)}`);
+    console.log(`Starting Balance:  $${STARTING_BALANCE.toFixed(2)}`);
     console.log(`Final Balance:     $${balance.toFixed(2)}`);
+    console.log(`Return:            ${(((balance - STARTING_BALANCE) / STARTING_BALANCE) * 100).toFixed(2)}%`);
     console.log(`Max Drawdown:      ${maxDrawdown.toFixed(2)}%`);
     console.log(`Profit Factor:     ${profitFactor.toFixed(2)}`);
     console.log(`Expectancy/Trade:  $${expectancy.toFixed(2)}`);
