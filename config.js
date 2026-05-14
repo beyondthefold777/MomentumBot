@@ -11,23 +11,17 @@ module.exports = {
 
     // =========================
     // BACKTEST SETTINGS
-    //
-    // Kraken public API returns
-    // max 720 candles per request.
-    // Interval controls history depth:
-    //   60m  → ~30 days
-    //   240m → ~120 days
     // =========================
 
-    BACKTEST_INTERVAL: 60,      // 1h candles — best balance of detail vs history
-    BACKTEST_CANDLES:  720,     // max Kraken returns (~30 days of 1h data)
-    VERBOSE:           true,    // log every trade (set false for clean summary only)
+    BACKTEST_INTERVAL: 60,      // 1h candles
+    BACKTEST_CANDLES:  720,     // ~30 days of 1h data
+    VERBOSE:           true,
 
     // =========================
     // TRADE SIZE
     // =========================
 
-    TRADE_SIZE_USD: 250,
+    TRADE_SIZE_USD: 5000,       // RAISED from 250 — full position sizing
 
     // =========================
     // INDICATORS
@@ -37,43 +31,39 @@ module.exports = {
     RSI_OVERSOLD:   35,
     RSI_OVERBOUGHT: 65,
 
-    // ATR in PRICE UNITS (not percent)
-    // On 1h BTC candles expect $150-600 ATR
-    // Raising min to 150 filters dead hours
-    ATR_MIN:   150,
-
+    ATR_MIN:   150,             // filters dead low-vol hours
     CHOP_ZONE: 0.03,            // % deviation below which market is dead
 
     // =========================
     // SCALP MODE
     // =========================
 
-    SCALP_ENTRY:           -0.35, // price must be 0.35% below MA to consider entry
-    SCALP_SCORE_THRESHOLD:  4,    // raised from 3 — score 3 was too easy in choppy market
-    SCALP_TIME_STOP:        8,    // max CANDLES to hold scalp (8h on 1h candles)
+    SCALP_ENTRY:           -0.20, // LOOSENED from -0.35 — more entry opportunities
+    SCALP_SCORE_THRESHOLD:  3,    // LOWERED from 4 — more scalp signals
+    SCALP_TIME_STOP:        4,    // LOWERED from 8 — max 4h, avoids rollover fees
     SCALP_COOLDOWN:         15000,
 
-    // ATR-based exits
     // At $300 ATR on $100k BTC: atrPct = 0.3%
-    // TP = 0.3 * 8 = 2.4% gross, ~2.1% net after fees — viable
-    // SL = 0.3 * 2.5 = 0.75% gross — R:R = 3.2:1
-    ATR_SCALP_TP: 8.0,
-    ATR_SCALP_SL: 2.5,
+    // TP = 0.3 * 5 = 1.5% gross = $75 on $5k trade
+    // SL = 0.3 * 2 = 0.6% gross = $30 on $5k trade — R:R = 2.5:1
+    ATR_SCALP_TP: 5.0,
+    ATR_SCALP_SL: 2.0,
 
     // =========================
     // TREND MODE
     // =========================
 
     TREND_STRENGTH_MIN:    0.5,
-    TREND_SCORE_THRESHOLD: 3,
+    TREND_SCORE_THRESHOLD: 4,    // RAISED from 3 — only high conviction trends
     TREND_COOLDOWN:        60000,
 
     SCALP_SCORE_WEIGHT: 1,
     TREND_SCORE_WEIGHT: 1,
 
-    // At $300 ATR: TP = 0.3 * 6 = 1.8% net, SL = 0.3 * 2 = 0.6% — R:R = 3:1
+    // TP = 0.3 * 6 = 1.8% = $90 on $5k — only take strong trend setups
+    // SL = 0.3 * 3 = 0.9% = $45 on $5k — R:R = 2:1
     ATR_TREND_TP: 6.0,
-    ATR_TREND_SL: 2.0,
+    ATR_TREND_SL: 3.0,          // RAISED from 2.0 — stops noise wicking you out
 
     // =========================
     // RISK CONTROLS
@@ -93,7 +83,6 @@ module.exports = {
 
     // =========================
     // LEGACY THRESHOLDS
-    // Not used by hybridStrategy
     // =========================
 
     BUY_THRESHOLD:    -1.5,
