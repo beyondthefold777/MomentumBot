@@ -64,6 +64,27 @@ async function runBacktest() {
     // cooldown tracking
     let trendCooldownUntil = 0;
 
+    // =========================
+    // CONSECUTIVE LOSS BRAKE
+    //
+    // Tracks how many losses have
+    // fired back-to-back. When 2+
+    // in a row, the strategy engine
+    // is told to require UPTREND
+    // even for high-conviction
+    // score 5+ fast-track entries.
+    //
+    // Resets to 0 on any winning
+    // trade. This stops the bot
+    // from catching falling knives
+    // in sustained downtrends while
+    // still allowing fast-track
+    // entries once conditions
+    // recover.
+    // =========================
+
+    let consecutiveLosses = 0;
+
     // -------------------------------------------------------
     // 3. LOOP
     // -------------------------------------------------------
@@ -92,6 +113,7 @@ async function runBacktest() {
                 balance += Math.max(0, result.pnlUsd);
                 trades.push(result);
                 liquidations++;
+                consecutiveLosses++;
 
                 if (CONFIG.VERBOSE) {
                     console.log(
@@ -118,6 +140,14 @@ async function runBacktest() {
                 balance += result.pnlUsd;
                 trades.push(result);
 
+                // time stops count as a loss for brake purposes
+                // if they closed negative, otherwise reset
+                if (result.pnlUsd > 0) {
+                    consecutiveLosses = 0;
+                } else {
+                    consecutiveLosses++;
+                }
+
                 if (CONFIG.VERBOSE) logSell(position, result);
 
                 position = null;
@@ -131,10 +161,11 @@ async function runBacktest() {
 
         const signal = evaluateStrategy({
             price,
-            history:  window,
-            position: position ? { ...position } : null,
+            history:          window,
+            position:         position ? { ...position } : null,
             regime,
-            atr
+            atr,
+            consecutiveLosses  // <-- passed in so strategy can gate on it
         });
 
         // -------------------------------------------------------
@@ -197,6 +228,18 @@ async function runBacktest() {
             const result = closeTrade(position, price, time, signal.reason);
             balance += result.pnlUsd;
             trades.push(result);
+
+            // =========================
+            // UPDATE CONSECUTIVE LOSSES
+            // Win resets the counter.
+            // Any loss increments it.
+            // =========================
+
+            if (result.pnlUsd > 0) {
+                consecutiveLosses = 0;
+            } else {
+                consecutiveLosses++;
+            }
 
             if (CONFIG.VERBOSE) logSell(position, result);
 

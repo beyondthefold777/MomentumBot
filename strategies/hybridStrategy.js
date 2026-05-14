@@ -8,55 +8,38 @@ const {
 } = require("../utils/indicators");
 
 // =========================
-// STRATEGY ENGINE v7.4
+// STRATEGY ENGINE v7.5
 //
-// CHANGES FROM v7.3:
+// CHANGES FROM v7.4:
 //
-// 1. SCORE 5 FAST-TRACK (SCALP)
-//    If RSI is oversold AND showing
-//    reversal AND deviation is deep
-//    (<= -0.20), score can hit 5+.
-//    These high-conviction entries
-//    now bypass the UPTREND gate.
-//    Rationale: a deep RSI reversal
-//    with strong pullback is a valid
-//    mean-reversion signal even in
-//    sideways conditions.
+// 1. CONSECUTIVE LOSS BRAKE
+//    run.js now tracks consecutive
+//    losses and passes the count in.
+//    If 2+ losses in a row, the
+//    score 5+ fast-track is suspended
+//    and UPTREND is required even
+//    for high-conviction entries.
+//    This stops the bot re-entering
+//    on RSI oversold signals during
+//    sustained downtrends (the
+//    April 18-19 and May 7-8
+//    loss clusters).
 //
-// 2. TIGHTER SCALP STOP (config)
-//    ATR_SCALP_SL: 1.2 → 0.9
-//    Cuts losers faster. The avg
-//    loser was $34 — this targets
-//    sub-$25.
+//    Resets automatically on any
+//    winning trade — so once the
+//    market recovers, fast-track
+//    entries resume normally.
 //
-// 3. WIDER SCALP TP (config)
-//    ATR_SCALP_TP: 3.0 → 3.5
-//    Avg winner was $46 — this
-//    targets $55+. Improves the
-//    win/loss dollar ratio.
-//
-// 4. TREND SCORE THRESHOLD RAISED
-//    4 → 5 (config)
-//    TREND mode was 0W/5L in the
-//    last 30 days. Raising the bar
-//    stops low-conviction trend
-//    entries from dragging the P&L.
-//
-// 5. RSI_OVERSOLD RAISED (config)
-//    38 → 42
-//    More candles qualify as
-//    oversold, so reversal signals
-//    fire more frequently on genuine
-//    pullbacks.
-//
-// 6. ATR_MIN LOWERED (config)
-//    200 → 150
-//    Was filtering valid setups.
-//    150 still blocks truly dead
-//    low-vol sessions.
+// 2. SCORE 7 DEEP DEVIATION GATE
+//    Score 7 fast-track now requires
+//    deviation <= -0.30 (previously
+//    -0.20). Filters shallow entries
+//    that look oversold but haven't
+//    pulled back far enough to be
+//    genuine mean-reversion setups.
 //
 // Everything else is untouched
-// from v7.3.
+// from v7.4.
 // =========================
 
 const ROUND_TRIP_COST =
@@ -68,7 +51,8 @@ function evaluateStrategy({
     position,
     regime,
     atr,
-    candlesSinceEntry = 0
+    candlesSinceEntry = 0,
+    consecutiveLosses = 0     // passed from run.js
 }) {
 
     const movingAvg =
@@ -138,43 +122,61 @@ function evaluateStrategy({
             if (deviation <= -0.20)   score += 1;
 
             // =========================
-            // SCORE 5 FAST-TRACK
+            // SCORE 5+ FAST-TRACK
             //
-            // High-conviction entries:
-            // deep RSI reversal + strong
-            // pullback can fire even in
-            // sideways conditions.
-            // Score 4 in uptrend still
-            // requires the trend gate.
+            // High-conviction mean-reversion
+            // entries bypass the UPTREND gate
+            // UNLESS we're on a losing streak.
+            //
+            // After 2+ consecutive losses,
+            // assume we're in a downtrend and
+            // require UPTREND confirmation even
+            // for high-score entries.
+            //
+            // Score 7 additionally requires
+            // deviation <= -0.30 to prevent
+            // shallow entries in falling markets.
             // =========================
+
+            const onLosingStreak = consecutiveLosses >= 2;
 
             const highConviction =
                 score >= 5 &&
                 rsiReversal &&
-                deviation <= -0.20;
+                deviation <= -0.20 &&
+                !onLosingStreak;
 
-            if (highConviction) {
+            // score 7 requires deeper pullback
+            // regardless of streak status
+            const deepEnough =
+                score < 7 || deviation <= -0.30;
+
+            if (highConviction && deepEnough) {
                 return {
                     action: "BUY",
-                    reason: "High-conviction RSI reversal (score 5+ fast-track)",
+                    reason: `High-conviction RSI reversal (score ${score} fast-track)`,
                     score, rsi, previousRSI, rsiReversal,
-                    trend, deviation, regime, atr
+                    trend, deviation, regime, atr,
+                    consecutiveLosses
                 };
             }
 
             // =========================
             // HARD TREND GATE
             //
-            // Score 4 entries still require
-            // uptrend confirmation. Only
-            // score 5+ fast-tracks bypass.
+            // Score 4 entries always require
+            // uptrend. Score 5+ only bypasses
+            // when NOT on a losing streak.
             // =========================
 
             if (trend !== "UPTREND") {
                 return {
                     action: "HOLD",
-                    reason: "Scalp blocked — not in uptrend",
-                    score, trend, deviation, rsi, regime
+                    reason: onLosingStreak
+                        ? `Scalp blocked — losing streak (${consecutiveLosses}) requires uptrend`
+                        : "Scalp blocked — not in uptrend",
+                    score, trend, deviation, rsi, regime,
+                    consecutiveLosses
                 };
             }
 
@@ -183,7 +185,8 @@ function evaluateStrategy({
                     action: "BUY",
                     reason: "RSI scalp reversal entry",
                     score, rsi, previousRSI, rsiReversal,
-                    trend, deviation, regime, atr
+                    trend, deviation, regime, atr,
+                    consecutiveLosses
                 };
             }
 
@@ -191,7 +194,8 @@ function evaluateStrategy({
                 action: "HOLD",
                 reason: "Scalp score too low",
                 score, rsi, previousRSI, rsiReversal,
-                trend, deviation, regime
+                trend, deviation, regime,
+                consecutiveLosses
             };
         }
 
@@ -264,7 +268,6 @@ function evaluateStrategy({
 
         // =========================
         // TIME STOP
-        // Hard cap — safety net only.
         // =========================
 
         if (candlesSinceEntry >= CONFIG.SCALP_TIME_STOP * 2) {
@@ -298,19 +301,6 @@ function evaluateStrategy({
             if (trend === "UPTREND")    trendScore += 2;
             if (trendStrong)            trendScore += 1;
             if (rsi >= 50 && rsi <= 70) trendScore += 1;
-
-            // =========================
-            // TREND EXTRA: RSI MOMENTUM
-            //
-            // Added a 5th point available
-            // for trend entries. RSI must
-            // be rising and above 55 —
-            // confirms momentum is actually
-            // building, not just sideways
-            // with a high RSI reading.
-            // Required to reach new
-            // threshold of 5.
-            // =========================
 
             const minRSIBars =
                 (CONFIG.RSI_PERIOD || 14) * 3 + 2;
