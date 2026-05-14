@@ -48,8 +48,8 @@ function getTrendDirection(data, trendWindow) {
 
     const percentChange = ((end - start) / start) * 100;
 
-    if (percentChange >  1.0) return "UPTREND";
-    if (percentChange < -1.0) return "DOWNTREND";
+    if (percentChange >  0.6) return "UPTREND";
+    if (percentChange < -0.6) return "DOWNTREND";
 
     return "SIDEWAYS";
 }
